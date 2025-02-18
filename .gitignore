@@ -1,0 +1,18 @@
+# PowerShell
+*.pssproj
+*.ps1.tests
+
+# VS Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+
+# Windows
+[Tt]emp/
+[Ll]ogs/
+*.log
+
+# Personal data
+**/backup/*
+**/cache/*
