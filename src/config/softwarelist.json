@@ -42,6 +42,20 @@
     "TestingComplete": true
   },
   {
+    "Name": "Apple_iTunes",
+    "Version": "latest",
+    "Download": true,
+    "Install": true,
+    "MachineScope": true,
+    "InstallationType": "Winget",
+    "ApplicationID": "Apple.iTunes",
+    "DownloadURL": "",
+    "ProcessIDs": [],
+    "InstallerArguments": ["--location","$InstallPath"],
+    "UninstallerArguments": [],
+    "TestingComplete": true
+  },
+  {
     "Name": "Astro_CommandCenter",
     "Version": "latest",
     "Download": false,
@@ -353,6 +367,20 @@
     "TestingComplete": true
   },
   {
+    "Name": "MusicBrains_Picard",
+    "Version": "latest",
+    "Download": true,
+    "Install": true,
+    "MachineScope": true,
+    "InstallationType": "Winget",
+    "ApplicationID": "MusicBrainz.Picard",
+    "DownloadURL": "",
+    "ProcessIDs": [],
+    "InstallerArguments": ["--location","$InstallPath"],
+    "UninstallerArguments": [],
+    "TestingComplete": true
+  },
+  {
     "Name": "Notepad++",
     "Version": "latest",
     "Download": true,
@@ -659,6 +687,20 @@
     "DownloadURL": "https://www.diskdigger.org/DiskDigger.exe",
     "ProcessIDs": [],
     "InstallerArguments": [],
+    "UninstallerArguments": [],
+    "TestingComplete": true
+  },
+  {
+    "Name": "LDPlayer",
+    "Version": "latest",
+    "Download": true,
+    "Install": true,
+    "MachineScope": false,
+    "InstallationType": "Other",
+    "ApplicationID": "",
+    "DownloadURL": "",
+    "ProcessIDs": [],
+    "InstallerArguments": ["/SILENT","/DIR=$InstallPath"],
     "UninstallerArguments": [],
     "TestingComplete": true
   },
