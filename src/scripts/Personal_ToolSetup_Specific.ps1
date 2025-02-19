@@ -131,41 +131,6 @@ function Invoke-PostInstall_Python {[CmdletBinding()]param([Parameter()][object]
     return $true
 }
 
-function Invoke-PostInstall_Git {[CmdletBinding()]param([Parameter()][object]$Application)
-    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
-
-    $Command = "git config --global core.longpaths true"
-    Log-Message "DBUG" "Executing command: $Command" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
-    try {git config --global core.longpaths true;Log-Message "INFO" "git longpaths enabled" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose}
-    catch {Log-Message "ERRR" "Unable to enable git longpaths" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose; return $false}
-    $Command = "git config --global user.name `"beastmp`""
-    Log-Message "DBUG" "Executing command: $Command" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
-    try {git config --global user.name `"beastmp`";Log-Message "INFO" "git user name set" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose}
-    catch {Log-Message "ERRR" "Unable to set git user name" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose; return $false}
-    $Command = "git config --global user.email `"beastmpdevelopment@gmail.com`""
-    Log-Message "DBUG" "Executing command: $Command" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
-    try {git config --global user.email `"beastmpdevelopment@gmail.com`";Log-Message "INFO" "git user email set" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose}
-    catch {Log-Message "ERRR" "Unable to set git user email" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose; return $false}
-    # Repair-WinGetPackageManager
-    return $true
-}
-
-function Invoke-PostInstall_Oracle_MySQL {[CmdletBinding()]param([Parameter()][object]$Application)
-    if (-not (Add-ToPath -Value "$($Application.InstallPath)\bin")) {Log-Message "ERRR" "Failed to add to PATH" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose; return $false}
-    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
-    $ConfigurationArguments = "--console --action=configure --password=rootpass --datadir=`"$($Application.InstallPath)\ProgramData`" --add-user='beastmp':'Mp859644!32':localhost:`"Administrator`":Windows"
-    $Command = "$($Application.InstallPath)\mysql_configurator.exe $ConfigurationArguments"
-    $PowershellCommand = "Start-Process -FilePath '$($Application.InstallPath)\mysql_configurator.exe' -ArgumentList '$ConfigurationArguments' -NoNewWindow -Wait"
-    Log-Message "DBUG" "Command: $Command" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
-    Log-Message "DBUG" "Powershell Command: $PowershellCommand" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
-    try {
-        Start-Process -FilePath "$($Application.InstallPath)\mysql_configurator.exe" -ArgumentList $ConfigurationArguments -NoNewWindow -Wait
-        Log-Message "INFO" "$($Application.Name) configuration complete" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
-    }
-    catch {Log-Message "ERRR" "$($Application.Name) configuration failed" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose; return $false}
-    return $true
-}
-
 function Invoke-PostInstall_Seagate_DiskWizard {[CmdletBinding()]param([Parameter()][object]$Application)
     $ApplicationPath = (Get-ChildItem -Path $Application.InstallPath).FullName
     Log-Message "INFO" "Running installer for $($Application.Name) v$($Application.Version)..." -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose

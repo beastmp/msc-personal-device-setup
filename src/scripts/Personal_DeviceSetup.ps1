@@ -189,57 +189,6 @@ function Get-DriveList {
     }
 }
 
-function Set-GoogleDriveMapping {
-    param (
-        [string]$GoogleDriveEmail,
-        [string]$DesiredLetter
-    )
-
-    Write-Host "[INFO] Changing Google Drive letter for $GoogleDriveEmail..." -ForegroundColor Cyan
-
-    $emailKeyMap = @{
-        'blackwidowmilf143@gmail.com' = '108397542208085523603'
-        'jennaloiacano@gmail.com' = '114732391918949850463'
-        'beastmp13@gmail.com' = '117071222561899795506'
-    }
-
-    $registryPath = "HKCU:\SOFTWARE\Google\DriveFS"
-    $valueName = "PerAccountPreferences"
-
-    try {
-        if (-not (Test-Path $registryPath)) {
-            New-Item -Path $registryPath -Force | Out-Null
-            Write-Host "[INFO] Created registry path: $registryPath" -ForegroundColor Gray
-        }
-
-        $currentValue = Get-ItemProperty -Path $registryPath -Name $valueName -ErrorAction SilentlyContinue
-        $preferences = if ($currentValue) { $currentValue.PerAccountPreferences | ConvertFrom-Json } else { Initialize-GoogleDrivePreferences }
-
-        $key = $emailKeyMap[$GoogleDriveEmail]
-        $accountPref = $preferences.per_account_preferences | Where-Object { $_.key -eq $key }
-        if ($accountPref) {
-            $accountPref.value.mount_point_path = $DesiredLetter
-        }
-
-        $newValueData = $preferences | ConvertTo-Json -Compress
-        Set-ItemProperty -Path $registryPath -Name $valueName -Value $newValueData
-        Write-Host "[INFO] Successfully changed Google Drive letter for $GoogleDriveEmail to drive $DesiredLetter" -ForegroundColor Green
-    }
-    catch {
-        Write-Host "[ERROR] Failed to change Google Drive letter: $_" -ForegroundColor Red
-    }
-}
-
-function Initialize-GoogleDrivePreferences {
-    return @{
-        per_account_preferences = @(
-            @{key = '108397542208085523603'; value = @{ mount_point_path = 'W' }},
-            @{key = '114732391918949850463'; value = @{ mount_point_path = 'X' }},
-            @{key = '117071222561899795506'; value = @{ mount_point_path = 'Y' }}
-        )
-    }
-}
-
 function Set-DriveLettersAndLabels {
     $ExternalDisk = Get-Disk | Where-Object { $_.Number -eq 1 }  # Replace 0 with your disk number
     $ExternalPartition = Get-Partition -DiskNumber $ExternalDisk.Number | Where-Object {$_.PartitionNumber -eq 1}
