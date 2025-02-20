@@ -12,5 +12,17 @@
     },
     "logging": {
         "fileNameFormat": "{LogType}-{ScriptName}-{Action}-{TargetName}-{Version}-{DateTime}.txt"
+    },
+    "execution": {
+        "maxConcurrentJobs": 3,
+        "jobTimeoutSeconds": 1800,
+        "cacheRetentionDays": 30,
+        "retryCount": 3,
+        "retryDelaySeconds": 10
+    },
+    "cleanup": {
+        "removeStaging": true,
+        "removeFailedInstalls": true,
+        "cleanupCache": true
     }
 }

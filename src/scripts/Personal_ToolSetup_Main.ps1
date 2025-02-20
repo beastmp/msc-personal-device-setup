@@ -9,7 +9,11 @@ param (
     [string]$ApplicationVersion,  # Optional, for single application
     [int]$MaxRetries = 3,
     [int]$RetryDelay = 10,
-    [switch]$ParallelDownloads
+    [switch]$ParallelDownloads,
+    [int]$JobTimeout = 1800,
+    [int]$MaxConcurrentJobs = 3,
+    [int]$CacheRetentionDays = 30,
+    [switch]$CleanupCache
 )
 
 # Load and validate configuration
@@ -17,7 +21,7 @@ try {
     $script:Config = Get-Content -Raw -Path $ConfigPath | ConvertFrom-Json
     $requiredProps = @('directories', 'files', 'logging')
     $missingProps = $requiredProps | Where-Object {-not $Config.PSObject.Properties.Name.Contains($_)}
-    if ($missingProps) {throw "Missing required configuration properties: $($missingProps -join ', ')"}
+    if ($missingProps) {throw "Missing required configuration properties: $($missingProps -join ', ')"} 
 } catch {throw "Failed to load configuration from ${ConfigPath}: $_"}
 
 $script:BinariesDirectory = $Config.directories.binaries
@@ -27,6 +31,9 @@ $script:InstallDirectory = $Config.directories.install
 $script:PostInstallDirectory = $Config.directories.postInstall
 $script:LogDirectory = $Config.directories.logs
 $script:SoftwareListFileName = $Config.files.softwareList
+
+# Add cleanup on script exit
+trap {Write-Error $_;exit 1}
 
 #region HELPERS
 #region     LOG HELPERS
@@ -307,17 +314,41 @@ function Invoke-WithRetry {[CmdletBinding()]param([Parameter(Mandatory)][scriptb
 
 function Start-ParallelDownloads {[CmdletBinding()]param([Parameter()][object[]]$Applications)
     $jobs = @()
-    $maxConcurrent = 3
-    $runspacePool = [runspacefactory]::CreateRunspacePool(1, $maxConcurrent)
+    $runspacePool = [runspacefactory]::CreateRunspacePool(1, $MaxConcurrentJobs)
     $runspacePool.Open()
     
     foreach ($app in $Applications) {
-        $powerShell = [powershell]::Create().AddScript({param($Application) Invoke-DownloadSoftware -Application $Application}).AddArgument($app)
+        if (-not (Test-ApplicationDependencies -Application $app)) {
+            Log-Message "ERRR" "Skipping $($app.Name) due to missing dependencies"
+            continue
+        }
+        
+        $powerShell = [powershell]::Create().AddScript({param($Application)
+            Invoke-DownloadSoftware -Application $Application
+        }).AddArgument($app)
+        
         $powerShell.RunspacePool = $runspacePool
-        $jobs += @{PowerShell=$powerShell;Handle=$powerShell.BeginInvoke();App=$app}
+        
+        $jobs += @{PowerShell = $powerShell;Handle = $powerShell.BeginInvoke();App = $app;StartTime = Get-Date}
     }
-    # Wait for all jobs and collect results
-    foreach ($job in $jobs) {$job.PowerShell.EndInvoke($job.Handle);$job.PowerShell.Dispose()}
+    
+    # Wait for jobs with timeout
+    while ($jobs.Where({ -not $_.Handle.IsCompleted })) {
+        foreach ($job in $jobs.Where({ -not $_.Handle.IsCompleted })) {
+            if ((Get-Date) - $job.StartTime -gt [TimeSpan]::FromSeconds($JobTimeout)) {
+                Log-Message "ERRR" "Download timeout for $($job.App.Name)"
+                $job.PowerShell.Stop()
+                $job.Handle.IsCompleted = $true
+            }
+        }
+        Start-Sleep -Seconds 1
+    }
+    
+    foreach ($job in $jobs) {
+        try {$job.PowerShell.EndInvoke($job.Handle)}
+        catch {Log-Message "ERRR" "Error in parallel download of $($job.App.Name): $_"}
+        finally {$job.PowerShell.Dispose()}
+    }
     
     $runspacePool.Close()
     $runspacePool.Dispose()
@@ -327,6 +358,51 @@ function Start-ParallelDownloads {[CmdletBinding()]param([Parameter()][object[]]
 function Test-FileHash {[CmdletBinding()]param([Parameter(Mandatory)][string]$FilePath,[Parameter(Mandatory)][string]$ExpectedHash,[string]$Algorithm = 'SHA256')
     $actualHash = (Get-FileHash -Path $FilePath -Algorithm $Algorithm).Hash
     return $actualHash -eq $ExpectedHash
+}
+
+function Remove-OldCache {
+    [CmdletBinding()]
+    param()
+    
+    $cacheFiles = Get-ChildItem -Path $BinariesDirectory -Filter "*.cache"
+    $cutoffDate = (Get-Date).AddDays(-$CacheRetentionDays)
+    
+    foreach ($file in $cacheFiles) {
+        $cacheContent = Get-Content $file.FullName | ConvertFrom-Json
+        $cacheDate = [DateTime]::Parse($cacheContent.DateTime)
+        if ($cacheDate -lt $cutoffDate) {
+            Remove-Item $file.FullName -Force
+            $binaryPath = $file.FullName.Replace(".cache", "")
+            if (Test-Path $binaryPath) {
+                Remove-Item $binaryPath -Force
+            }
+        }
+    }
+}
+
+function Test-ApplicationDependencies {
+    [CmdletBinding()]
+    param([Parameter()][object]$Application)
+    
+    if (-not $Application.Dependencies) { return $true }
+    
+    foreach ($dep in $Application.Dependencies) {
+        if ($dep.Type -eq "Application") {
+            $installed = Test-Path $dep.InstallPath
+            if (-not $installed) {
+                Log-Message "ERRR" "Dependency $($dep.Name) not found at $($dep.InstallPath)"
+                return $false
+            }
+        }
+        elseif ($dep.Type -eq "WindowsFeature") {
+            $feature = Get-WindowsOptionalFeature -Online -FeatureName $dep.Name
+            if ($feature.State -ne "Enabled") {
+                Log-Message "ERRR" "Required Windows feature $($dep.Name) is not enabled"
+                return $false
+            }
+        }
+    }
+    return $true
 }
 #endregion
 #endregion
@@ -741,6 +817,10 @@ function Invoke-MainAction {[CmdletBinding()]param([Parameter()][object]$Softwar
     } else {Log-Message "ERRR" "Invalid action specified. Use 'Install', 'Uninstall', or 'Test'." -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose}
 }
 
+if ($CleanupCache) {
+    Remove-OldCache
+}
+
 if (-Not (Test-Path -Path $LogDirectory)) {New-Item -ItemType Directory -Path $LogDirectory -Force | Out-Null}
 $HostName   = hostname
 $Version    = $PSVersionTable.PSVersion.ToString()
@@ -751,18 +831,29 @@ if ($PSBoundParameters['Debug']) {$DebugPreference = 'Continue'}
 $ScriptStart = Get-Date
 Set-Location -Path $ScriptsDirectory
 
-Log-Message "PROG" "Beginning main script execution..." -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
-$SoftwareList = Invoke-MainPreStep
-. "$PSScriptRoot/Personal_ToolSetup_AppSpecific.ps1"
-$WingetSoftwareList = $SoftwareList | Where-Object {$_.InstallationType -eq "Winget"}
-$PSModuleSoftwareList = $SoftwareList | Where-Object {$_.InstallationType -eq "PSModule"}
-$OtherSoftwareList = $SoftwareList | Where-Object {$_.InstallationType -eq "Other"}
-$ManualSoftwareList = $SoftwareList | Where-Object {$_.InstallationType -eq "Manual"}
-Invoke-MainAction -SoftwareList $WingetSoftwareList
-Invoke-MainAction -SoftwareList $PSModuleSoftwareList
-Invoke-MainAction -SoftwareList $OtherSoftwareList
-Invoke-MainAction -SoftwareList $ManualSoftwareList
-Invoke-MainPostStep
+try {
+    Log-Message "PROG" "Beginning main script execution..." -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
+    $SoftwareList = Invoke-MainPreStep
+    . "$PSScriptRoot/Personal_ToolSetup_AppSpecific.ps1"
+    $WingetSoftwareList = $SoftwareList | Where-Object {$_.InstallationType -eq "Winget"}
+    $PSModuleSoftwareList = $SoftwareList | Where-Object {$_.InstallationType -eq "PSModule"}
+    $OtherSoftwareList = $SoftwareList | Where-Object {$_.InstallationType -eq "Other"}
+    $ManualSoftwareList = $SoftwareList | Where-Object {$_.InstallationType -eq "Manual"}
+    Invoke-MainAction -SoftwareList $WingetSoftwareList
+    Invoke-MainAction -SoftwareList $PSModuleSoftwareList
+    Invoke-MainAction -SoftwareList $OtherSoftwareList
+    Invoke-MainAction -SoftwareList $ManualSoftwareList
+    Invoke-MainPostStep
+}
+catch {
+    Log-Message "ERRR" "Script execution failed: $_"
+    throw
+}
+finally {
+    if (Test-Path $StagingDirectory) {
+        Remove-Item -Path $StagingDirectory -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
 
 $ScriptEnd = Get-Date
 $ScriptTimeSpan = New-TimeSpan -Start $ScriptStart -End $ScriptEnd
