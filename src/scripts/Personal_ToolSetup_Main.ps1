@@ -1,26 +1,30 @@
 #region PARAMS
 [CmdletBinding()]
 param (
-    [string]$BinariesDirectory = "C:\Testing\Binaries",
-    [string]$ScriptsDirectory = "C:\Temp\Scripts",
-    [string]$StagingDirectory = "C:\Testing\Staging",
-    [string]$InstallDirectory = "C:\Testing\Apps",
-    [string]$PostInstallDirectory = "C:\Testing\Installed",
-    [string]$LogDirectory = "C:\Testing\Logs",
-    [string]$SoftwareListFileName = "personal_softwarelist.json",
+    [string]$ConfigPath = "$PSScriptRoot/../config/script_config.json",
     [ValidateSet("Install","Uninstall","Test")]
     [string]$Action = "Install",
     [switch]$TestingMode,
     [string]$ApplicationName,  # Optional, for single application
     [string]$ApplicationVersion  # Optional, for single application
 )
-#endregion
+
+# Load configuration
+$script:Config = Get-Content -Raw -Path $ConfigPath | ConvertFrom-Json
+$script:BinariesDirectory = $Config.directories.binaries
+$script:ScriptsDirectory = $Config.directories.scripts
+$script:StagingDirectory = $Config.directories.staging
+$script:InstallDirectory = $Config.directories.install
+$script:PostInstallDirectory = $Config.directories.postInstall
+$script:LogDirectory = $Config.directories.logs
+$script:SoftwareListFileName = $Config.files.softwareList
+
 #region HELPERS
 #region     LOG HELPERS
 function Get-LogFileName {param([Parameter()][ValidateSet("Log","Transcript")][string]$LogType,[Parameter()][string]$Action,[Parameter()][string]$TargetName,[Parameter()][string]$Version)
     $ScriptName = $(Split-Path $MyInvocation.PSCommandPath -Leaf).Replace(".ps1", "")
     $DateTime   = Get-Date -f 'yyyyMMddHHmmss'
-    $FileName   = "$LogType-$ScriptName-$Action-$TargetName-$Version-$DateTime.txt"
+    $FileName   = $Config.logging.fileNameFormat.Replace("{LogType}", $LogType).Replace("{ScriptName}", $ScriptName).Replace("{Action}", $Action).Replace("{TargetName}", $TargetName).Replace("{Version}", $Version).Replace("{DateTime}", $DateTime)
     return $FileName
 }
 

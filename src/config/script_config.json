@@ -1,0 +1,16 @@
+{
+    "directories": {
+        "binaries": "C:\\Testing\\Binaries",
+        "scripts": "C:\\Temp\\Scripts",
+        "staging": "C:\\Testing\\Staging",
+        "install": "C:\\Testing\\Apps",
+        "postInstall": "C:\\Testing\\Installed",
+        "logs": "C:\\Testing\\Logs"
+    },
+    "files": {
+        "softwareList": "personal_softwarelist.json"
+    },
+    "logging": {
+        "fileNameFormat": "{LogType}-{ScriptName}-{Action}-{TargetName}-{Version}-{DateTime}.txt"
+    }
+}
