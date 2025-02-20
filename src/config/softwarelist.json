@@ -168,6 +168,20 @@
     "TestingComplete": true
   },
   {
+    "Name": "DropIt",
+    "Version": "latest",
+    "Download": true,
+    "Install": true,
+    "MachineScope": true,
+    "InstallationType": "Winget",
+    "ApplicationID": "LupoPenSuite.DropIt",
+    "DownloadURL": "",
+    "ProcessIDs": [],
+    "InstallerArguments": ["--location","$InstallPath"],
+    "UninstallerArguments": [],
+    "TestingComplete": true
+  },
+  {
     "Name": "EA_EAGames",
     "Version": "latest",
     "Download": true,
@@ -359,7 +373,7 @@
     "Install": true,
     "MachineScope": true,
     "InstallationType": "Winget",
-    "ApplicationID": "Mojang.MinecraftLauncher",
+    "ApplicationID": "9pgw18npbzv5",
     "DownloadURL": "",
     "ProcessIDs": [],
     "InstallerArguments": ["--custom","\"INSTALLDIR=\"$InstallPath\"\""],
@@ -409,18 +423,18 @@
     "TestingComplete": true
   },
   {
-    "Name": "NVIDIA_GEForce",
-    "Version": "latest",
+    "Name": "NVIDIA",
+    "Version": "11.0.2.312",
     "Download": true,
     "Install": true,
     "MachineScope": false,
-    "InstallationType": "Winget",
-    "ApplicationID": "Nvidia.GeForceNow",
-    "DownloadURL": "",
+    "InstallationType": "Other",
+    "ApplicationID": "",
+    "DownloadURL": "https://us.download.nvidia.com/nvapp/client/11.0.2.312/NVIDIA_app_v11.0.2.312.exe",
     "ProcessIDs": [],
     "InstallerArguments": [],
     "UninstallerArguments": [],
-    "SymLinkPath": "C:\\Users\\WDAGUtilityAccount\\AppData\\Local\\NVIDIA Corporation\\GeForceNOW"
+    "SymLinkPath": "C:\\Program Files\\NVIDIA Corporation"
   },
   {
     "Name": "OpenVPN",
@@ -519,7 +533,7 @@
     "ProcessIDs": [],
     "InstallerArguments": [],
     "UninstallerArguments": [],
-    "SymLinkPath": "C:\\Users\\WDAGUtilityAccount\\AppData\\Local\\Programs\\Plexamp",
+    "SymLinkPath": "C:\\Users\\beast\\AppData\\Local\\Programs\\Plexamp",
     "TestingComplete": true
   },
   {
