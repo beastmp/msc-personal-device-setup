@@ -6,11 +6,20 @@ param (
     [string]$Action = "Install",
     [switch]$TestingMode,
     [string]$ApplicationName,  # Optional, for single application
-    [string]$ApplicationVersion  # Optional, for single application
+    [string]$ApplicationVersion,  # Optional, for single application
+    [int]$MaxRetries = 3,
+    [int]$RetryDelay = 10,
+    [switch]$ParallelDownloads
 )
 
-# Load configuration
-$script:Config = Get-Content -Raw -Path $ConfigPath | ConvertFrom-Json
+# Load and validate configuration
+try {
+    $script:Config = Get-Content -Raw -Path $ConfigPath | ConvertFrom-Json
+    $requiredProps = @('directories', 'files', 'logging')
+    $missingProps = $requiredProps | Where-Object {-not $Config.PSObject.Properties.Name.Contains($_)}
+    if ($missingProps) {throw "Missing required configuration properties: $($missingProps -join ', ')"}
+} catch {throw "Failed to load configuration from ${ConfigPath}: $_"}
+
 $script:BinariesDirectory = $Config.directories.binaries
 $script:ScriptsDirectory = $Config.directories.scripts
 $script:StagingDirectory = $Config.directories.staging
@@ -277,6 +286,48 @@ function Invoke-ScriptStep {[CmdletBinding()]param([Parameter()][string]$StepNam
     }else{Log-Message "VRBS" "$StepName for $($Application.Name) v$($Application.Version) not defined" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose}
     return $StepResult
 }
+
+function Invoke-WithRetry {[CmdletBinding()]param([Parameter(Mandatory)][scriptblock]$ScriptBlock,[string]$Activity,[int]$MaxAttempts = $MaxRetries,[int]$DelaySeconds = $RetryDelay)
+    $attempt = 1
+    $success = $false
+    while(-not $success -and $attempt -le $MaxAttempts){
+        try {
+            if($attempt -gt 1){Log-Message "WARN" "Retrying $Activity (Attempt $attempt of $MaxAttempts)..."}
+            $result = & $ScriptBlock
+            $success = $true
+            return $result
+        } catch {
+            if($attempt -eq $MaxAttempts){Log-Message "ERRR" "Failed to $Activity after $MaxAttempts attempts: $_";throw}
+            Log-Message "WARN" "Attempt $attempt failed: $_"
+            Start-Sleep -Seconds $DelaySeconds
+            $attempt++
+        }
+    }
+}
+
+function Start-ParallelDownloads {[CmdletBinding()]param([Parameter()][object[]]$Applications)
+    $jobs = @()
+    $maxConcurrent = 3
+    $runspacePool = [runspacefactory]::CreateRunspacePool(1, $maxConcurrent)
+    $runspacePool.Open()
+    
+    foreach ($app in $Applications) {
+        $powerShell = [powershell]::Create().AddScript({param($Application) Invoke-DownloadSoftware -Application $Application}).AddArgument($app)
+        $powerShell.RunspacePool = $runspacePool
+        $jobs += @{PowerShell=$powerShell;Handle=$powerShell.BeginInvoke();App=$app}
+    }
+    # Wait for all jobs and collect results
+    foreach ($job in $jobs) {$job.PowerShell.EndInvoke($job.Handle);$job.PowerShell.Dispose()}
+    
+    $runspacePool.Close()
+    $runspacePool.Dispose()
+}
+
+# Add hash validation for downloads
+function Test-FileHash {[CmdletBinding()]param([Parameter(Mandatory)][string]$FilePath,[Parameter(Mandatory)][string]$ExpectedHash,[string]$Algorithm = 'SHA256')
+    $actualHash = (Get-FileHash -Path $FilePath -Algorithm $Algorithm).Hash
+    return $actualHash -eq $ExpectedHash
+}
 #endregion
 #endregion
 #region TESTING
@@ -417,8 +468,20 @@ function Invoke-Testing {[CmdletBinding()]param([Parameter()][object]$Applicatio
 #endregion
 #region DOWNLOAD
 function Invoke-DownloadSoftware {[CmdletBinding()]param([Parameter()][object]$Application)
-    if($Application.Download) {
-        Invoke-ScriptStep -StepName "PreDownload" -Application $Application
+    if(-not $Application.Download) { return $true }
+    # Implement file caching
+    $cacheKey = "$($Application.Name)_$($Application.Version)"
+    $cachePath = Join-Path $BinariesDirectory "$cacheKey.cache"
+    
+    if (Test-Path $cachePath) {
+        $cached = Get-Content $cachePath | ConvertFrom-Json
+        if ($cached.Hash -and (Test-FileHash -FilePath $Application.BinaryPath -ExpectedHash $cached.Hash)) {
+            Log-Message "INFO" "Using cached version of $($Application.Name) v$($Application.Version)"
+            return $true
+        }
+    }
+    
+    Invoke-WithRetry -Activity "download $($Application.Name)" -ScriptBlock {
         if ($Application.InstallationType -eq "Winget") {
             $TempBinaryPath = $($Application.BinaryPath).Replace([System.IO.Path]::GetExtension($Application.BinaryPath), "")
             Log-Message "INFO" "Downloading $($Application.Name) version $($Application.Version) from winget to $TempBinaryPath..." -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
@@ -471,7 +534,12 @@ function Invoke-DownloadSoftware {[CmdletBinding()]param([Parameter()][object]$A
             catch {Log-Message "ERRR" "Unable to copy from $($Application.BinaryPath) to $($Application.StagedPath)" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose;return $false}
         }
         Invoke-ScriptStep -StepName "PostDownload" -Application $Application
-    } else {Log-Message "VRBS" "Download flag for $($Application.Name) v$($Application.Version) set to false" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose}
+    }
+    
+    # Cache the download info
+    $hash=(Get-FileHash -Path $Application.BinaryPath).Hash
+    @{Hash=$hash;DateTime=Get-Date -Format "o"} | ConvertTo-Json | Set-Content $cachePath
+    
     return $true
 }
 #endregion
@@ -607,6 +675,8 @@ function Invoke-UninstallSoftware {[CmdletBinding()]param([Parameter()][object]$
 function Invoke-MainAction {[CmdletBinding()]param([Parameter()][object]$SoftwareList)
     if ($Action -eq "Install") {
         if (-not (Invoke-MainInstallPreStep)) {Log-Message "ERRR" "Pre-install step failed" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose; return $false}
+        # Handle parallel downloads if enabled
+        if ($ParallelDownloads) {Start-ParallelDownloads -Applications $SoftwareList}
         foreach ($Application in $SoftwareList) {
             if($TestingMode -and $Application.TestingComplete) {continue}
             if ($ApplicationName -and ($Application.Name -ne $ApplicationName -or ($ApplicationVersion -and $Application.Version -ne $ApplicationVersion))) {continue}
