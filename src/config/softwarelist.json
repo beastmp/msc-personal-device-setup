@@ -196,6 +196,20 @@
     "TestingComplete": true
   },
   {
+    "Name": "Facebook_Messenger",
+    "Version": "latest",
+    "Download": true,
+    "Install": true,
+    "MachineScope": true,
+    "InstallationType": "Winget",
+    "ApplicationID": "9WZDNCRF0083",
+    "DownloadURL": "",
+    "ProcessIDs": [],
+    "InstallerArguments": ["--location","$InstallPath"],
+    "UninstallerArguments": [],
+    "TestingComplete": true
+  },
+  {
     "Name": "GIMP_GIMP",
     "Version": "latest",
     "Download": true,
