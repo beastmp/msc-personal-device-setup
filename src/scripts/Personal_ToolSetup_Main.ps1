@@ -27,8 +27,7 @@ Write-Host "Module path resolved to: $modulePath"
 
 # Import modules in dependency order with full paths
 $moduleOrder = @(
-    @{Name="Types"; Path=Join-Path $modulePath "Types.psm1"},
-    @{Name="ConfigManager"; Path=Join-Path $modulePath "ConfigManager.psm1"},
+        @{Name="ConfigManager"; Path=Join-Path $modulePath "ConfigManager.psm1"},
     @{Name="SystemOperations"; Path=Join-Path $modulePath "SystemOperations.psm1"},
     @{Name="Monitoring"; Path=Join-Path $modulePath "Monitoring.psm1"},
     @{Name="StateManager"; Path=Join-Path $modulePath "StateManager.psm1"},

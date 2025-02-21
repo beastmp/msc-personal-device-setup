@@ -1,6 +1,38 @@
 using namespace System.Collections
 using namespace System.IO
-using module .\Types.psm1
+using namespace System.Version
+
+class ApplicationConfig {
+    [string]$Name
+    [string]$Version
+    [string]$InstallationType
+    [string]$ApplicationID
+    [string]$ModuleID
+    [string]$DownloadURL
+    [string[]]$ProcessIDs
+    [string[]]$InstallerArguments
+    [string[]]$UninstallerArguments
+    [bool]$Download
+    [bool]$Install
+    [bool]$MachineScope
+    
+    # Path properties
+    [string]$BinaryPath
+    [string]$StagedPath 
+    [string]$InstallPath
+    [string]$PostInstallPath
+    [string]$SymLinkPath
+    
+    [Dependency[]]$Dependencies
+    [bool]$TestingComplete
+}
+
+class Dependency {
+    [string]$Type
+    [string]$Name
+    [string]$InstallPath
+    [Version]$MinVersion
+}
 
 class ApplicationManager {
     hidden [object]$SystemOps
@@ -20,7 +52,7 @@ class ApplicationManager {
         $this.ConfigManager = $configManager
     }
 
-    [object]InitializeApplication([object]$app) {
+    [ApplicationConfig]InitializeApplication([ApplicationConfig]$app) {
         $this.Logger.Log("INFO", "Initializing application paths for $($app.Name)")
         
         try {
@@ -98,7 +130,7 @@ class ApplicationManager {
         # Process installer arguments
         if ($app.InstallerArguments) {
             $this.Logger.Log("VRBS", "Processing installer arguments")
-            $processedArgs = $app.InstallerArguments -split ';' | ForEach-Object {
+            $processedArgs = $app.InstallerArguments | ForEach-Object {
                 $arg = $_
                 foreach ($var in $variables.GetEnumerator()) {
                     if ($arg -match [regex]::Escape($var.Key)) {
@@ -108,7 +140,7 @@ class ApplicationManager {
                 }
                 $arg
             }
-            $app.InstallerArguments = $processedArgs -join ';'
+            $app.InstallerArguments = $processedArgs
             $this.Logger.Log("DBUG", "Final installer arguments: $($app.InstallerArguments)")
         }
 

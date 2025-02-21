@@ -1,6 +1,14 @@
 using namespace System.Collections
 using namespace System.IO
 
+class InstallationState {
+    [string]$Status
+    [datetime]$StartTime
+    [datetime]$EndTime
+    [string]$ErrorMessage
+    [hashtable]$Metadata = @{}
+}
+
 class StateManager {
     [string]$StateFile
     [hashtable]$State = @{}
