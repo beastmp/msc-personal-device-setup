@@ -3,16 +3,19 @@ using namespace System.IO
 using namespace System.Management.Automation
 
 class ConfigManager {
+    hidden [object]$Logger
     [object]$Config
     [System.Collections.ArrayList]$ValidationErrors
     
-    ConfigManager([string]$configPath) {
+    ConfigManager([string]$configPath, [object]$logger) {
         $this.ValidationErrors = [System.Collections.ArrayList]::new()
+        $this.Logger = $logger
         
         # Validate and resolve paths
         $resolvedConfigPath = [System.IO.Path]::GetFullPath($configPath)
         if (-not (Test-Path $resolvedConfigPath)) {
-            throw "Configuration file not found at: $resolvedConfigPath"
+            $this.Logger.Log("ERRR", "Configuration file not found at: $resolvedConfigPath")
+            throw "Configuration file not found"
         }
         
         $this.LoadConfig($resolvedConfigPath)
@@ -23,9 +26,11 @@ class ConfigManager {
         try {
             $this.Config = Get-Content -Raw -Path $configPath | ConvertFrom-Json
             $this.ValidateConfig()
+            $this.Logger.Log("INFO", "Configuration loaded successfully")
         }
         catch {
-            throw "Failed to load configuration: $_"
+            $this.Logger.Log("ERRR", "Failed to load configuration: $_")
+            throw
         }
     }
     
@@ -87,9 +92,10 @@ class ConfigManager {
 function New-ConfigManager {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory=$true)][string]$ConfigPath
+        [Parameter(Mandatory=$true)][string]$ConfigPath,
+        [Parameter(Mandatory=$true)][object]$Logger
     )
-    return [ConfigManager]::new($ConfigPath)
+    return [ConfigManager]::new($ConfigPath, $Logger)
 }
 
 Export-ModuleMember -Function New-ConfigManager

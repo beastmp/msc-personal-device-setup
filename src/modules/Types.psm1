@@ -1,5 +1,6 @@
 using namespace System.Collections
 using namespace System.IO
+using namespace System.Version
 
 class ApplicationConfig {
     [string]$Name
@@ -14,11 +15,14 @@ class ApplicationConfig {
     [bool]$Download
     [bool]$Install
     [bool]$MachineScope
-    [string]$InstallPath
+    
+    # Path properties
     [string]$BinaryPath
-    [string]$StagedPath
+    [string]$StagedPath 
+    [string]$InstallPath
     [string]$PostInstallPath
     [string]$SymLinkPath
+    
     [Dependency[]]$Dependencies
     [bool]$TestingComplete
 }

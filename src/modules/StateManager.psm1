@@ -4,21 +4,29 @@ using namespace System.IO
 class StateManager {
     [string]$StateFile
     [hashtable]$State = @{}
+    hidden [object]$Logger
 
-    StateManager([string]$stateFile) {
+    StateManager([string]$stateFile, [object]$logger) {
         $this.StateFile = $stateFile
+        $this.Logger = $logger
         $this.LoadState()
     }
 
     [void]LoadState() {
         if (Test-Path $this.StateFile) {
-            $jsonContent = Get-Content $this.StateFile | ConvertFrom-Json
-            # Convert PSCustomObject to hashtable
-            $this.State = @{}
-            if ($jsonContent) {
-                $jsonContent.PSObject.Properties | ForEach-Object {
-                    $this.State[$_.Name] = $_.Value
+            try {
+                $jsonContent = Get-Content $this.StateFile | ConvertFrom-Json
+                # Convert PSCustomObject to hashtable
+                $this.State = @{}
+                if ($jsonContent) {
+                    $jsonContent.PSObject.Properties | ForEach-Object {
+                        $this.State[$_.Name] = $_.Value
+                    }
                 }
+                $this.Logger.Log("VRBS", "State loaded successfully from $($this.StateFile)")
+            }
+            catch {
+                $this.Logger.Log("ERRR", "Failed to load state: $_")
             }
         }
     }
@@ -64,9 +72,10 @@ class StateManager {
 function New-StateManager {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory=$true)][string]$StateFile
+        [Parameter(Mandatory=$true)][string]$StateFile,
+        [Parameter(Mandatory=$true)][object]$Logger
     )
-    return [StateManager]::new($StateFile)
+    return [StateManager]::new($StateFile, $Logger)
 }
 
 Export-ModuleMember -Function New-StateManager

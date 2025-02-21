@@ -47,34 +47,44 @@ foreach ($module in $moduleOrder) {
 
 # Initialize managers
 try {
-    $configManager = New-ConfigManager -ConfigPath $ConfigPath
-    Write-Host "ConfigManager initialized successfully"
+    # Create logger first with no paths
+    $logger = New-LogManager
+    $logger.Log("INFO", "Basic logger created")
     
-    $stateManager = New-StateManager -StateFile $configManager.GetStatePath()
-    Write-Host "StateManager initialized successfully"
+    # Create config manager with logger
+    $configManager = New-ConfigManager -ConfigPath $ConfigPath -Logger $logger
+    $logger.Log("INFO", "ConfigManager initialized successfully")
     
-    $logger = New-LogManager -LogPath (Join-Path $configManager.ResolvePath('logs') "application.log") `
-                            -TelemetryPath (Join-Path $configManager.ResolvePath('logs') "telemetry.log")
-    Write-Host "LogManager initialized successfully"
-
-    $logger.Log("WARN", "TESTING LOGGER")
+    # Now initialize logger with proper paths
+    $logger.Initialize(
+        (Join-Path $configManager.ResolvePath('logs') "application.log"),
+        (Join-Path $configManager.ResolvePath('logs') "telemetry.log")
+    )
+    $logger.Log("INFO", "Logger fully initialized with proper paths")
+    
+    # Initialize remaining managers with logger
+    $stateManager = New-StateManager -StateFile $configManager.GetStatePath() -Logger $logger
+    $logger.Log("INFO", "StateManager initialized successfully")
     
     $systemOps = New-SystemOperations -BinDir $configManager.ResolvePath("binaries") `
                                     -StagingDir $configManager.ResolvePath("staging") `
-                                    -InstallDir $configManager.ResolvePath("install")
-    Write-Host "SystemOperations initialized successfully"
+                                    -InstallDir $configManager.ResolvePath("install") `
+                                    -Logger $logger
+    $logger.Log("INFO", "SystemOperations initialized successfully")
     
     $appManager = New-ApplicationManager -SystemOps $systemOps `
                                        -StateManager $stateManager `
                                        -Logger $logger `
-                                       -ScriptsDir $configManager.ResolvePath("scripts") `
-                                       -BinDir $configManager.ResolvePath("binaries") `
-                                       -StagingDir $configManager.ResolvePath("staging") `
-                                       -PostInstallDir $configManager.ResolvePath("postInstall")
-    Write-Host "ApplicationManager initialized successfully"
+                                       -ConfigManager $configManager
+    $logger.Log("INFO", "ApplicationManager initialized successfully")
 }
 catch {
-    Write-Error "Failed to initialize managers: $_"
+    if ($logger) {
+        $logger.Log("ERRR", "Failed to initialize managers: $_")
+    }
+    else {
+        Write-Error "Failed to initialize managers: $_"
+    }
     throw
 }
 
@@ -95,7 +105,7 @@ $script:LogDirectory = $Config.directories.logs
 $script:SoftwareListFileName = $Config.files.softwareList
 
 # Add cleanup on script exit
-trap {Write-Error $_;exit 1}
+#trap {Write-Error $_;exit 1}
 
 #region HELPERS
 #region     LOG HELPERS
@@ -322,13 +332,13 @@ function Invoke-MainTestPreStep {[CmdletBinding()]param()
 function Invoke-MainPostStep {[CmdletBinding()]param()
     Log-Message "INFO" "Starting main post-step..." -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
     Log-Message "INFO" "Main post-step complete" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
-    return $true
+    # return $true
 }
 
 function Invoke-MainInstallPostStep {[CmdletBinding()]param()
     Log-Message "INFO" "Starting main install post-step..." -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
     Log-Message "INFO" "Main install post-step complete" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
-    return $true
+    # return $true
 }
 
 function Invoke-MainUninstallPostStep {[CmdletBinding()]param()
@@ -814,10 +824,23 @@ function Invoke-MainAction {[CmdletBinding()]param([Parameter()][object]$Softwar
     switch ($Action) {
         "Install" {
             if (-not (Invoke-MainInstallPreStep)) { return $false }
+            
             if ($ParallelDownloads) {
                 $downloadJobs = @()
                 foreach ($app in $SoftwareList) {
-                    if (ShouldProcessApp $app) {$downloadJobs += Start-Job -ScriptBlock {param($app);$appManager.Download($app)} -ArgumentList $app}
+                    if (ShouldProcessApp $app) {
+                        try {
+                            $appManager.InitializeApplication($app)
+                            $downloadJobs += Start-Job -ScriptBlock {
+                                param($app)
+                                $appManager.Download($app)
+                            } -ArgumentList $app
+                        }
+                        catch {
+                            $logger.Log("ERRR", "Failed to initialize $($app.Name): $_")
+                            continue
+                        }
+                    }
                 }
                 Wait-Job $downloadJobs | Receive-Job
             }
@@ -828,20 +851,28 @@ function Invoke-MainAction {[CmdletBinding()]param([Parameter()][object]$Softwar
                 $logger.Log("PROG", "Processing installation for $($app.Name)")
                 $timer = [System.Diagnostics.Stopwatch]::StartNew()
                 
-                if (-not $ParallelDownloads) {
-                    if (-not $appManager.Download($app)) { 
-                        $logger.Log("ERROR", "Download failed for $($app.Name)")
-                        continue 
+                try {
+                    $app = $appManager.InitializeApplication($app)
+                    
+                    if (-not $ParallelDownloads) {
+                        if (-not $appManager.Download($app)) { 
+                            $logger.Log("ERRR", "Download failed for $($app.Name)")
+                            continue 
+                        }
                     }
+                    
+                    if (-not $appManager.Install($app)) {
+                        $logger.Log("ERRR", "Installation failed for $($app.Name)")
+                        continue
+                    }
+                    
+                    $timer.Stop()
+                    $logger.Log("PROG", "Installation of $($app.Name) completed in $($timer.Elapsed)")
                 }
-                
-                if (-not $appManager.Install($app)) {
-                    $logger.Log("ERROR", "Installation failed for $($app.Name)")
+                catch {
+                    $logger.Log("ERRR", "Failed to process $($app.Name): $_")
                     continue
                 }
-                
-                $timer.Stop()
-                $logger.Log("PROG", "Installation of $($app.Name) completed in $($timer.Elapsed)")
             }
             
             Invoke-MainInstallPostStep
@@ -856,7 +887,7 @@ function Invoke-MainAction {[CmdletBinding()]param([Parameter()][object]$Softwar
                 
                 $logger.Log("PROG", "Processing uninstallation for $($app.Name)")
                 if (-not $appManager.Uninstall($app)) {
-                    $logger.Log("ERROR", "Uninstallation failed for $($app.Name)")
+                    $logger.Log("ERRR", "Uninstallation failed for $($app.Name)")
                     continue
                 }
             }
@@ -911,11 +942,8 @@ try {
         Action = $Action
         TestingMode = $TestingMode
     })
-
+    
     $SoftwareList = Invoke-MainPreStep
-    # foreach ($app in $SoftwareList) {
-    #     $stateManager.ValidateApplication($app)
-    # }
     
     # Process software by installation type - Fix the loop structure
     foreach ($installType in @('Winget', 'PSModule', 'Other', 'Manual')) {
@@ -928,19 +956,19 @@ try {
             $logger.Log("INFO", "Found $($typeList.Count) $currentType applications to process")
             Invoke-MainAction -SoftwareList $typeList
         } else {
-            $logger.Log("INFO", "No $currentType applications found")
+                $logger.Log("INFO", "No $currentType applications found")
+            }
         }
+        
+        Invoke-MainPostStep
+        
+        $logger.TrackEvent("ScriptEnd", @{
+            Success = $true
+            Duration = $ScriptTimeSpan.TotalSeconds
+        })
     }
-    
-    Invoke-MainPostStep
-    
-    $telemetryManager.TrackEvent("ScriptEnd", @{
-        Success = $true
-        Duration = $ScriptTimeSpan.TotalSeconds
-    })
-}
 catch {
-    $telemetryManager.TrackEvent("ScriptError", @{
+    $logger.TrackEvent("ScriptError", @{
         Error = $_.Exception.Message
         Stack = $_.ScriptStackTrace
     })

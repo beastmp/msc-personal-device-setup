@@ -2,6 +2,9 @@ using namespace System.Collections
 using namespace System.IO
 
 class SystemOperations {
+    # Add Logger property
+    hidden [object]$Logger
+
     # File operation properties
     [string]$BinariesDirectory
     [string]$StagingDirectory
@@ -12,10 +15,12 @@ class SystemOperations {
     [int]$RetryCount = 3
     [int]$RetryDelay = 10
     
-    SystemOperations([string]$binDir, [string]$stagingDir, [string]$installDir) {
+    # Update constructor to accept Logger
+    SystemOperations([string]$binDir, [string]$stagingDir, [string]$installDir, [object]$logger) {
         $this.BinariesDirectory = $binDir
         $this.StagingDirectory = $stagingDir
         $this.InstallDirectory = $installDir
+        $this.Logger = $logger
     }
     
     # File Operations
@@ -23,11 +28,11 @@ class SystemOperations {
         if (-Not (Test-Path -Path $DirPath)) {
             try {
                 New-Item -ItemType Directory -Path $DirPath -Force | Out-Null
-                Write-Verbose "$DirPath directory created successfully"
+                $this.Logger.Log("VRBS", "$DirPath directory created successfully")
                 return $true
             }
             catch {
-                Write-Error "Unable to create $DirPath directory"
+                $this.Logger.Log("ERRR", "Unable to create $DirPath directory: $_")
                 return $false
             }
         }
@@ -40,10 +45,11 @@ class SystemOperations {
         
         try {
             cmd "/c" mklink "/J" $SourcePath $TargetPath
+            $this.Logger.Log("VRBS", "Created symbolic link from $SourcePath to $TargetPath")
             return $true
         }
         catch {
-            Write-Error "Unable to create symbolic link from $SourcePath to $TargetPath"
+            $this.Logger.Log("ERRR", "Failed to create symbolic link: $_")
             return $false
         }
     }
@@ -51,24 +57,25 @@ class SystemOperations {
     [bool]MoveFolder([string]$source, [string]$destination) {
         try {
             Move-Item -Path $source -Destination $destination -Force
+            $this.Logger.Log("VRBS", "Moved $source to $destination")
             return $true
         }
         catch {
-            Write-Error "Failed to move $source to $destination"
+            $this.Logger.Log("ERRR", "Failed to move $source to ${destination}: $_")
             return $false
         }
     }
     
     [bool]ValidatePath([string]$path) {
         if ([string]::IsNullOrWhiteSpace($path)) {
-            Write-Error "Path cannot be null or empty"
+            $this.Logger.Log("ERRR", "Path cannot be null or empty")
             return $false
         }
         
         try {
             $resolvedPath = [System.IO.Path]::GetFullPath($path)
             if (-not (Test-Path $resolvedPath -IsValid)) {
-                Write-Error "Invalid path format: $path"
+                $this.Logger.Log("ERRR", "Invalid path format: $path")
                 return $false
             }
             
@@ -81,7 +88,37 @@ class SystemOperations {
             return $true
         }
         catch {
-            Write-Error "Path validation failed: $_"
+            $this.Logger.Log("ERRR", "Path validation failed: $_")
+            return $false
+        }
+    }
+
+    # Update ValidateFileHash method signature to make Algorithm optional
+    [bool]ValidateFileHash([string]$FilePath, [string]$ExpectedHash) {
+        return $this.ValidateFileHashWithAlgorithm($FilePath, $ExpectedHash, 'SHA256')
+    }
+
+    # Add new method with all parameters
+    hidden [bool]ValidateFileHashWithAlgorithm([string]$FilePath, [string]$ExpectedHash, [string]$Algorithm) {
+        try {
+            if (-not (Test-Path $FilePath)) {
+                $this.Logger.Log("ERRR", "File not found: $FilePath")
+                return $false
+            }
+            
+            $actualHash = (Get-FileHash -Path $FilePath -Algorithm $Algorithm).Hash
+            $result = $actualHash -eq $ExpectedHash
+            
+            if ($result) {
+                $this.Logger.Log("VRBS", "Hash validation successful for $FilePath")
+            } else {
+                $this.Logger.Log("WARN", "Hash mismatch for $FilePath. Expected: $ExpectedHash, Got: $actualHash")
+            }
+            
+            return $result
+        }
+        catch {
+            $this.Logger.Log("ERRR", "Hash validation failed: $_")
             return $false
         }
     }
@@ -92,12 +129,13 @@ class SystemOperations {
         while ($attempt -le $this.RetryCount) {
             try {
                 if ($attempt -gt 1) {
-                    Write-Warning "Retrying $Activity (Attempt $attempt of $($this.RetryCount))..."
+                    $this.Logger.Log("WARN", "Retrying $Activity (Attempt $attempt of $($this.RetryCount))...")
                 }
                 return & $ScriptBlock
             }
             catch {
                 if ($attempt -eq $this.RetryCount) {
+                    $this.Logger.Log("ERRR", "Failed to $Activity after $($this.RetryCount) attempts: $_")
                     throw "Failed to $Activity after $($this.RetryCount) attempts: $_"
                 }
                 Start-Sleep -Seconds $this.RetryDelay
@@ -105,6 +143,10 @@ class SystemOperations {
             }
         }
         return $null
+    }
+
+    [object]StartProcess([string]$Command, [string[]]$Arguments) {
+        return $this.StartProcess($Command, $Arguments, 0)
     }
     
     [object]StartProcess([string]$Command, [string[]]$Arguments, [int]$Timeout = 0) {
@@ -117,28 +159,42 @@ class SystemOperations {
         $pinfo.UseShellExecute = $false
         $pinfo.CreateNoWindow = $true
         $pinfo.Arguments = $Arguments -join ' '
+        $this.Logger.Log("DBUG", "Command: $($pinfo.FileName) $($pinfo.Arguments)")
+        $this.Logger.Log("DBUG", "PowerShell Command: Start-Process -FilePath $($pinfo.FileName) -ArgumentList $($pinfo.Arguments) -NoNewWindow -Wait")
         
         $process = New-Object System.Diagnostics.Process
         $process.StartInfo = $pinfo
-        $outputData = ""
-        $errorData = ""
+        $script:outputData = ""
+        $script:errorData = ""
         
-        $process.OutputDataReceived += { param($s, $e) if ($e.Data) { $outputData += "$($e.Data)`n" } }
-        $process.ErrorDataReceived += { param($s, $e) if ($e.Data) { $errorData += "$($e.Data)`n" } }
+        $outputEvent = Register-ObjectEvent -InputObject $process -EventName OutputDataReceived -Action {
+            if ($EventArgs.Data) { $script:outputData += "$($EventArgs.Data)`n" }
+        }
+        $errorEvent = Register-ObjectEvent -InputObject $process -EventName ErrorDataReceived -Action {
+            if ($EventArgs.Data) { $script:errorData += "$($EventArgs.Data)`n" }
+        }
         
         $process.Start() | Out-Null
+        $this.Logger.Log("DBUG", "ProcessID: $($process.Id)")
         $process.BeginOutputReadLine()
         $process.BeginErrorReadLine()
         
         if (-not $process.WaitForExit($Timeout * 1000)) {
             $process.Kill()
+            $this.Logger.Log("ERRR", "Process $Command timed out after $Timeout seconds")
+            Unregister-Event -SourceIdentifier $outputEvent.Name
+            Unregister-Event -SourceIdentifier $errorEvent.Name
             throw "Process $Command timed out after $Timeout seconds"
         }
-        
+        Unregister-Event -SourceIdentifier $outputEvent.Name
+        Unregister-Event -SourceIdentifier $errorEvent.Name
+        $this.Logger.Log("DBUG", "ExitCode: $($process.ExitCode)")
+        $this.Logger.Log("DBUG", "StandardOutput: $script:outputData")
+        $this.Logger.Log("DBUG", "StandardError: $script:errorData")
         return @{
             ExitCode = $process.ExitCode
-            StandardOutput = $outputData.Trim()
-            StandardError = $errorData.Trim()
+            StandardOutput = $script:outputData.Trim()
+            StandardError = $script:errorData.Trim()
         }
     }
     
@@ -146,7 +202,7 @@ class SystemOperations {
         $process = Get-Process -Name $ProcessName -ErrorAction SilentlyContinue
         if ($process) {
             $process | Stop-Process -Force
-            Write-Verbose "Killed process: $ProcessName"
+            $this.Logger.Log("VRBS", "Killed process: $ProcessName")
         }
     }
 
@@ -160,9 +216,10 @@ function New-SystemOperations {
     param(
         [Parameter(Mandatory=$true)][string]$BinDir,
         [Parameter(Mandatory=$true)][string]$StagingDir,
-        [Parameter(Mandatory=$true)][string]$InstallDir
+        [Parameter(Mandatory=$true)][string]$InstallDir,
+        [Parameter(Mandatory=$true)][object]$Logger
     )
-    return [SystemOperations]::new($BinDir, $StagingDir, $InstallDir)
+    return [SystemOperations]::new($BinDir, $StagingDir, $InstallDir, $Logger)
 }
 
 Export-ModuleMember -Function New-SystemOperations
