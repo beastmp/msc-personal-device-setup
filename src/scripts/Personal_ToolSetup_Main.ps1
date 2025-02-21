@@ -1,20 +1,81 @@
+#Requires -RunAsAdministrator
 #region PARAMS
 [CmdletBinding()]
 param (
-    [string]$ConfigPath = "$PSScriptRoot/../config/script_config.json",
+    [Parameter(Mandatory=$false)]
+    [ValidateScript({Test-Path $_})]
+    [string]$ConfigPath = "$(Split-Path -Parent $PSScriptRoot)/config/script_config.json",
+    
+    [Parameter(Mandatory=$false)]
     [ValidateSet("Install","Uninstall","Test")]
     [string]$Action = "Install",
+    
+    [Parameter(Mandatory=$false)]
+    [string]$ApplicationName,
+    
+    [Parameter(Mandatory=$false)]
+    [string]$ApplicationVersion,
+    
     [switch]$TestingMode,
-    [string]$ApplicationName,  # Optional, for single application
-    [string]$ApplicationVersion,  # Optional, for single application
-    [int]$MaxRetries = 3,
-    [int]$RetryDelay = 10,
     [switch]$ParallelDownloads,
-    [int]$JobTimeout = 1800,
-    [int]$MaxConcurrentJobs = 3,
-    [int]$CacheRetentionDays = 30,
     [switch]$CleanupCache
 )
+
+# Resolve module paths and import modules
+$modulePath = Split-Path -Parent $PSScriptRoot
+$modulePath = Join-Path $modulePath "modules"
+Write-Host "Module path resolved to: $modulePath"
+
+# Import modules in dependency order with full paths
+$moduleOrder = @(
+    @{Name="Types"; Path=Join-Path $modulePath "Types.psm1"},
+    @{Name="ConfigManager"; Path=Join-Path $modulePath "ConfigManager.psm1"},
+    @{Name="SystemOperations"; Path=Join-Path $modulePath "SystemOperations.psm1"},
+    @{Name="Monitoring"; Path=Join-Path $modulePath "Monitoring.psm1"},
+    @{Name="StateManager"; Path=Join-Path $modulePath "StateManager.psm1"},
+    @{Name="ApplicationManager"; Path=Join-Path $modulePath "ApplicationManager.psm1"}
+)
+
+# Load all modules first
+foreach ($module in $moduleOrder) {
+    Write-Host "Loading module: $($module.Name) from $($module.Path)"
+    if (Test-Path $module.Path) {
+        Import-Module $module.Path -Force -Verbose
+    } else {
+        throw "Module file not found: $($module.Path)"
+    }
+}
+
+# Initialize managers
+try {
+    $configManager = New-ConfigManager -ConfigPath $ConfigPath
+    Write-Host "ConfigManager initialized successfully"
+    
+    $stateManager = New-StateManager -StateFile $configManager.GetStatePath()
+    Write-Host "StateManager initialized successfully"
+    
+    $logger = New-LogManager -LogPath (Join-Path $configManager.ResolvePath('logs') "application.log") `
+                            -TelemetryPath (Join-Path $configManager.ResolvePath('logs') "telemetry.log")
+    Write-Host "LogManager initialized successfully"
+    
+    $systemOps = New-SystemOperations -BinDir $configManager.ResolvePath("binaries") `
+                                    -StagingDir $configManager.ResolvePath("staging") `
+                                    -InstallDir $configManager.ResolvePath("install")
+    Write-Host "SystemOperations initialized successfully"
+    
+    $appManager = New-ApplicationManager -SystemOps $systemOps `
+                                       -StateManager $stateManager `
+                                       -Logger $logger `
+                                       -ScriptsDir $configManager.ResolvePath("scripts") `
+                                       -BinDir $configManager.ResolvePath("binaries") `
+                                       -StagingDir $configManager.ResolvePath("staging") `
+                                       -PostInstallDir $configManager.ResolvePath("postInstall")
+    Write-Host "ApplicationManager initialized successfully"
+}
+catch {
+    Write-Error "Failed to initialize managers: $_"
+    throw
+}
 
 # Load and validate configuration
 try {
@@ -243,7 +304,7 @@ function Invoke-MainInstallPreStep {[CmdletBinding()]param()
 }
 
 function Invoke-MainUninstallPreStep {[CmdletBinding()]param()
-    Log-Message "INFO" "Starting main uninstall pre-step..." -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
+    Log-Message "INFO" "Starting main uninstall pre-step..." -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
     Log-Message "INFO" "Main uninstall pre-step complete" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
     return $true
 }
@@ -748,73 +809,95 @@ function Invoke-UninstallSoftware {[CmdletBinding()]param([Parameter()][object]$
 }
 #endregion
 #region MAIN
-function Invoke-MainAction {[CmdletBinding()]param([Parameter()][object]$SoftwareList)
-    if ($Action -eq "Install") {
-        if (-not (Invoke-MainInstallPreStep)) {Log-Message "ERRR" "Pre-install step failed" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose; return $false}
-        # Handle parallel downloads if enabled
-        if ($ParallelDownloads) {Start-ParallelDownloads -Applications $SoftwareList}
-        foreach ($Application in $SoftwareList) {
-            if($TestingMode -and $Application.TestingComplete) {continue}
-            if ($ApplicationName -and ($Application.Name -ne $ApplicationName -or ($ApplicationVersion -and $Application.Version -ne $ApplicationVersion))) {continue}
-            Log-Message "PROG" "---------- Processing installation for $($Application.Name) v$($Application.Version) ----------" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
-            $InstallProcessStart = Get-Date
-            $FileExtension = [System.IO.Path]::GetExtension($Application.DownloadURL)
-            if([string]::IsNullOrEmpty($FileExtension) -or $FileExtension.Length -gt 5) {$FileExtension = ".exe"}
-            $AppName = "$($Application.Name)_$($Application.Version)$FileExtension"
-            $nameParts = if ($Application.Name -like "*_*") { $Application.Name -split "_" } else { @($Application.Name) }
-            $installPath = if ($nameParts.Count -gt 1) { "$InstallDirectory\$($nameParts[0])\$($nameParts[1])" } else { "$InstallDirectory\$($Application.Name)" }
-            $Application | Add-Member -MemberType NoteProperty -Name "InstallPath" -Value $installPath -Force
-            $Application | Add-Member -MemberType NoteProperty -Name "BinaryPath" -Value "${BinariesDirectory}\${AppName}" -Force
-            $Application | Add-Member -MemberType NoteProperty -Name "StagedPath" -Value "${StagingDirectory}\${AppName}" -Force
-            $Application | Add-Member -MemberType NoteProperty -Name "PostInstallPath" -Value "${PostInstallDirectory}\${AppName}" -Force
-            $Replacements = @{'$Name'=$Application.Name;'$Version'=$Application.Version;'$StagedPath'=$Application.StagedPath;'$InstallPath'=$Application.InstallPath;'$BinariesDirectory'=$BinariesDirectory;'$StagingDirectory'=$StagingDirectory}
-            if($Application.InstallerArguments){$Application.InstallerArguments = $($Application.InstallerArguments).ForEach{$Argument=$_;$($Replacements.GetEnumerator()).ForEach{$Argument = $Argument.Replace($_.Key, $_.Value)};$Argument}}
-            if (-not (Invoke-DownloadSoftware -Application $Application)) {Log-Message "ERRR" "Download failed" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose}
-            if (-not (Invoke-InstallSoftware -Application $Application)) {Log-Message "ERRR" "Installation failed" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose}
-            $InstallProcessEnd = Get-Date
-            $InstallProcessTimeSpan = New-TimeSpan -Start $InstallProcessStart -End $InstallProcessEnd
-            Log-Message "PROG" $("---------- Installation processing of $($Application.Name) v$($Application.Version) completed in {0:00}:{1:00}:{2:00}:{3:00} ----------" -f $InstallProcessTimeSpan.days,$InstallProcessTimeSpan.hours,$InstallProcessTimeSpan.minutes,$InstallProcessTimeSpan.seconds) -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
+function Invoke-MainAction {
+    [CmdletBinding()]
+    param([Parameter()][object]$SoftwareList)
+    
+    switch ($Action) {
+        "Install" {
+            if (-not (Invoke-MainInstallPreStep)) { return $false }
+            
+            if ($ParallelDownloads) {
+                # Handle parallel downloads
+                $downloadJobs = @()
+                foreach ($app in $SoftwareList) {
+                    if (ShouldProcessApp $app) {
+                        $downloadJobs += Start-Job -ScriptBlock {
+                            param($app)
+                            $appManager.Download($app)
+                        } -ArgumentList $app
+                    }
+                }
+                Wait-Job $downloadJobs | Receive-Job
+            }
+            
+            foreach ($app in $SoftwareList) {
+                if (-not (ShouldProcessApp $app)) { continue }
+                
+                $logger.Log("PROG", "Processing installation for $($app.Name)")
+                $timer = [System.Diagnostics.Stopwatch]::StartNew()
+                
+                if (-not $ParallelDownloads) {
+                    if (-not $appManager.Download($app)) { 
+                        $logger.Log("ERROR", "Download failed for $($app.Name)")
+                        continue 
+                    }
+                }
+                
+                if (-not $appManager.Install($app)) {
+                    $logger.Log("ERROR", "Installation failed for $($app.Name)")
+                    continue
+                }
+                
+                $timer.Stop()
+                $logger.Log("PROG", "Installation of $($app.Name) completed in $($timer.Elapsed)")
+            }
+            
+            Invoke-MainInstallPostStep
         }
-        Invoke-MainInstallPostStep
-    } elseif ($Action -eq "Uninstall") {
-        Invoke-MainUninstallPreStep
-        [Array]::Reverse($SoftwareList)
-        foreach ($Application in $SoftwareList) {
-            if($TestingMode -and $Application.TestingComplete) {continue}
-            if ($ApplicationName -and ($Application.Name -ne $ApplicationName -or ($ApplicationVersion -and $Application.Version -ne $ApplicationVersion))) {continue}
-            Log-Message "PROG" "---------- Processing uninstallation for $($Application.Name) v$($Application.Version) ----------" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
-            $UninstallProcessStart = Get-Date
-            $Application | Add-Member -MemberType NoteProperty -Name "PostInstallPath" -Value "$($PostInstallDirectory)\$($Application.Name)_$($Application.Version)$([System.IO.Path]::GetExtension($Application.BinaryURI))"
-            $Replacements = @{'$Name'=$Application.Name;'$Version'=$Application.Version;'$StagedPath'=$Application.StagedPath;'$InstallPath'=$Application.InstallPath;'$BinariesDirectory'=$BinariesDirectory;'$StagingDirectory'=$StagingDirectory}
-            if($Application.UninstallerArguments){$Application.UninstallerArguments = $($Application.UninstallerArguments).ForEach{$Argument=$_;$($Replacements.GetEnumerator()).ForEach{$Argument = $Argument.Replace($_.Key, $_.Value)};$Argument}}
-            if (-not (Invoke-UninstallSoftware -Application $Application)) {Log-Message "ERRR" "Uninstallation failed" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose}
-            $UninstallProcessEnd = Get-Date
-            $UninstallProcessTimeSpan = New-TimeSpan -Start $UninstallProcessStart -End $UninstallProcessEnd
-            Log-Message "PROG" $("---------- Uninstallation processing of $($Application.Name) v$($Application.Version) completed in {0:00}:{1:00}:{2:00}:{3:00} ----------" -f $UninstallProcessTimeSpan.days,$UninstallProcessTimeSpan.hours,$UninstallProcessTimeSpan.minutes,$UninstallProcessTimeSpan.seconds) -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
+        
+        "Uninstall" {
+            if (-not (Invoke-MainUninstallPreStep)) { return $false }
+            
+            [Array]::Reverse($SoftwareList)
+            foreach ($app in $SoftwareList) {
+                if (-not (ShouldProcessApp $app)) { continue }
+                
+                $logger.Log("PROG", "Processing uninstallation for $($app.Name)")
+                if (-not $appManager.Uninstall($app)) {
+                    $logger.Log("ERROR", "Uninstallation failed for $($app.Name)")
+                    continue
+                }
+            }
+            
+            Invoke-MainUninstallPostStep
         }
-        Invoke-MainUninstallPostStep
-    } elseif ($Action -eq "Test") {
-        Invoke-MainTestPreStep
-        foreach ($Application in $SoftwareList) {
-            if($TestingMode -and $Application.TestingComplete) {continue}
-            if ($ApplicationName -and ($Application.Name -ne $ApplicationName -or ($ApplicationVersion -and $Application.Version -ne $ApplicationVersion))) {continue}
-            Log-Message "INFO" "---------- Processing testing for $($Application.Name) v$($Application.Version) ----------" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
-            $FileExtension = [System.IO.Path]::GetExtension($Application.DownloadURL)
-            if([string]::IsNullOrEmpty($FileExtension) -or $FileExtension.Length -gt 5) {$FileExtension = ".exe"}
-            $AppName = "$($Application.Name)_$($Application.Version)$FileExtension"
-            $nameParts = if ($Application.Name -like "*_*") { $Application.Name -split "_" } else { @($Application.Name) }
-            $installPath = if ($nameParts.Count -gt 1) { "$InstallDirectory\$($nameParts[0])\$($nameParts[1])" } else { "$InstallDirectory\$($Application.Name)" }
-            $Application | Add-Member -MemberType NoteProperty -Name "InstallPath" -Value $installPath -Force
-            $Application | Add-Member -MemberType NoteProperty -Name "BinaryPath" -Value "${BinariesDirectory}\${AppName}" -Force
-            $Application | Add-Member -MemberType NoteProperty -Name "StagedPath" -Value "${StagingDirectory}\${AppName}" -Force
-            $Application | Add-Member -MemberType NoteProperty -Name "PostInstallPath" -Value "${PostInstallDirectory}\${AppName}" -Force
-            $Replacements = @{'$Name'=$Application.Name;'$Version'=$Application.Version;'$StagedPath'=$Application.StagedPath;'$InstallPath'=$Application.InstallPath;'$BinariesDirectory'=$BinariesDirectory;'$StagingDirectory'=$StagingDirectory}
-            # if($Application.InstallerArguments){$Application.InstallerArguments = $($Application.InstallerArguments).ForEach{$Argument=$_;$($Replacements.GetEnumerator()).ForEach{$Argument = $Argument.Replace($_.Key, $_.Value)};$Argument}}
-            # if($Application.UninstallerArguments){$Application.UninstallerArguments = $($Application.UninstallerArguments).ForEach{$Argument=$_;$($Replacements.GetEnumerator()).ForEach{$Argument = $Argument.Replace($_.Key, $_.Value)};$Argument}}
-            if (-not (Invoke-Testing -Application $Application)) {Log-Message "ERRR" "Testing failed" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose}
+        
+        "Test" {
+            if (-not (Invoke-MainTestPreStep)) { return $false }
+            
+            foreach ($app in $SoftwareList) {
+                if (-not (ShouldProcessApp $app)) { continue }
+                
+                $logger.Log("INFO", "Testing $($app.Name)")
+                Invoke-Testing -Application $app
+            }
+            
+            Invoke-MainTestPostStep
         }
-        Invoke-MainTestPostStep
-    } else {Log-Message "ERRR" "Invalid action specified. Use 'Install', 'Uninstall', or 'Test'." -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose}
+    }
+}
+
+# Helper function to determine if an app should be processed
+function ShouldProcessApp {
+    param([Parameter()][object]$app)
+    
+    if ($TestingMode -and $app.TestingComplete) { return $false }
+    if ($ApplicationName -and ($app.Name -ne $ApplicationName -or 
+        ($ApplicationVersion -and $app.Version -ne $ApplicationVersion))) {
+        return $false
+    }
+    return $true
 }
 
 if ($CleanupCache) {
@@ -829,27 +912,53 @@ $FilePath   = Join-Path -Path $LogDirectory -ChildPath $FileName
 Start-Transcript -IncludeInvocationHeader -NoClobber -Path $FilePath
 if ($PSBoundParameters['Debug']) {$DebugPreference = 'Continue'}
 $ScriptStart = Get-Date
-Set-Location -Path $ScriptsDirectory
+# Set-Location -Path $ScriptsDirectory
 
 try {
-    Log-Message "PROG" "Beginning main script execution..." -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
+    Log-Message "PROG" "Beginning main script execution..."
+    $telemetryManager.TrackEvent("ScriptStart", @{
+        Action = $Action
+        TestingMode = $TestingMode
+    })
+    
     $SoftwareList = Invoke-MainPreStep
-    . "$PSScriptRoot/Personal_ToolSetup_AppSpecific.ps1"
-    $WingetSoftwareList = $SoftwareList | Where-Object {$_.InstallationType -eq "Winget"}
-    $PSModuleSoftwareList = $SoftwareList | Where-Object {$_.InstallationType -eq "PSModule"}
-    $OtherSoftwareList = $SoftwareList | Where-Object {$_.InstallationType -eq "Other"}
-    $ManualSoftwareList = $SoftwareList | Where-Object {$_.InstallationType -eq "Manual"}
-    Invoke-MainAction -SoftwareList $WingetSoftwareList
-    Invoke-MainAction -SoftwareList $PSModuleSoftwareList
-    Invoke-MainAction -SoftwareList $OtherSoftwareList
-    Invoke-MainAction -SoftwareList $ManualSoftwareList
+    foreach ($app in $SoftwareList) {
+        $stateManager.ValidateApplication($app)
+    }
+    
+    # Process software by installation type
+    @{
+        Winget = { $_ | Where-Object { $_.InstallationType -eq "Winget" }}
+        PSModule = { $_ | Where-Object { $_.InstallationType -eq "PSModule" }}
+        Other = { $_ | Where-Object { $_.InstallationType -eq "Other" }}
+        Manual = { $_ | Where-Object { $_.InstallationType -eq "Manual" }}
+    }.GetEnumerator() | ForEach-Object {
+        $typeName = $_.Key
+        $typeFilter = $_.Value
+        
+        $typeList = $SoftwareList | & $typeFilter
+        if ($typeList) {
+            $logger.Log("INFO", "Processing $typeName applications")
+            Invoke-MainAction -SoftwareList $typeList
+        }
+    }
+    
     Invoke-MainPostStep
+    
+    $telemetryManager.TrackEvent("ScriptEnd", @{
+        Success = $true
+        Duration = $ScriptTimeSpan.TotalSeconds
+    })
 }
 catch {
-    Log-Message "ERRR" "Script execution failed: $_"
+    $telemetryManager.TrackEvent("ScriptError", @{
+        Error = $_.Exception.Message
+        Stack = $_.ScriptStackTrace
+    })
     throw
 }
 finally {
+    $stateManager.CleanupOldStates(30)
     if (Test-Path $StagingDirectory) {
         Remove-Item -Path $StagingDirectory -Recurse -Force -ErrorAction SilentlyContinue
     }

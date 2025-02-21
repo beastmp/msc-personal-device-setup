@@ -1,14 +1,14 @@
 {
     "directories": {
-        "binaries": "C:\\Testing\\Binaries",
-        "scripts": "C:\\Temp\\Scripts",
-        "staging": "C:\\Testing\\Staging",
-        "install": "C:\\Testing\\Apps",
-        "postInstall": "C:\\Testing\\Installed",
-        "logs": "C:\\Testing\\Logs"
+        "binaries": "D:\\Installation\\Binaries",
+        "scripts": "D:\\Scripts",
+        "staging": "D:\\Installation\\Staging",
+        "install": "D:\\Apps",
+        "postInstall": "D:\\Installation\\Installed",
+        "logs": "D:\\Logs"
     },
     "files": {
-        "softwareList": "personal_softwarelist.json"
+        "softwareList": "softwarelist.json"
     },
     "logging": {
         "fileNameFormat": "{LogType}-{ScriptName}-{Action}-{TargetName}-{Version}-{DateTime}.txt"
@@ -21,8 +21,8 @@
         "retryDelaySeconds": 10
     },
     "cleanup": {
-        "removeStaging": true,
-        "removeFailedInstalls": true,
-        "cleanupCache": true
+        "removeStaging": false,
+        "removeFailedInstalls": false,
+        "cleanupCache": false
     }
 }
