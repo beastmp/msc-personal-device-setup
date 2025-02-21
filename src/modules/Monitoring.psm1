@@ -58,7 +58,18 @@ class LogManager {
         }
     }
     
-    [void]Log([string]$level, [string]$message, [hashtable]$context = @{}) {
+    # Modify the Log method signature to be more explicit
+    [void]Log([string]$level, [string]$message) {
+        $this.LogWithContext($level, $message, @{})
+    }
+    
+    # Add the original method as an overload
+    [void]Log([string]$level, [string]$message, [hashtable]$context) {
+        $this.LogWithContext($level, $message, $context)
+    }
+    
+    # Add a private method for the full implementation
+    hidden [void]LogWithContext([string]$level, [string]$message, [hashtable]$context) {
         $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
         $logEntry = @{
             Timestamp = $timestamp
@@ -78,8 +89,9 @@ class LogManager {
         }
         
         Write-Host "[$timestamp] [$level] $message" -ForegroundColor $color
-        $logEntry | ConvertTo-Json | Add-Content -Path $this.LogPath
+        $logEntry | ConvertTo-Json | Add-Content -Path $this.LogPath -ErrorAction Stop
     }
+    
     
     [void]TrackEvent([string]$name, [hashtable]$properties) {
         $newEvent = @{

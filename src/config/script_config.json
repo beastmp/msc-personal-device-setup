@@ -1,7 +1,7 @@
 {
     "directories": {
         "binaries": "D:\\Installation\\Binaries",
-        "scripts": "D:\\Scripts",
+        "scripts": ".\\src\\config",
         "staging": "D:\\Installation\\Staging",
         "install": "D:\\Apps",
         "postInstall": "D:\\Installation\\Installed",

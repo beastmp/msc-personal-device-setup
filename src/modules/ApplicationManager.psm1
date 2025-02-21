@@ -6,33 +6,77 @@ class ApplicationManager {
     hidden [object]$SystemOps
     hidden [object]$StateManager
     hidden [object]$Logger
-    hidden [string]$ScriptsDirectory
-    hidden [string]$BinariesDirectory
-    hidden [string]$StagingDirectory
-    hidden [string]$PostInstallDirectory
+    hidden [object]$ConfigManager
     
     ApplicationManager(
         [object]$sysOps,
         [object]$stateManager,
         [object]$logger,
-        [string]$scriptsDir,
-        [string]$binDir,
-        [string]$stagingDir,
-        [string]$postInstallDir
+        [object]$configManager
     ) {
         $this.SystemOps = $sysOps
         $this.StateManager = $stateManager
         $this.Logger = $logger
-        $this.ScriptsDirectory = $scriptsDir
-        $this.BinariesDirectory = $binDir
-        $this.StagingDirectory = $stagingDir
-        $this.PostInstallDirectory = $postInstallDir
+        $this.ConfigManager = $configManager
+    }
+
+    [void]InitializeApplication([object]$Application) {
+        $InstallDirectory = $this.ConfigManager.ResolvePath('install')
+        $BinariesDirectory = $this.ConfigManager.ResolvePath('binaries')
+        $StagingDirectory = $this.ConfigManager.ResolvePath('staging')
+        $PostInstallDirectory = $this.ConfigManager.ResolvePath('postInstall')
+
+        $ext = if($Application.InstallationType -eq "Winget"){".exe"}
+        else{
+            if($Application.DownloadURL) {
+                $urlExt = [System.IO.Path]::GetExtension($Application.DownloadURL)
+                if ([string]::IsNullOrEmpty($urlExt) -or $urlExt.Length -gt 5){".exe"}else{$urlExt}
+            }else{".exe"}
+        }
+        $appBaseName = "$($Application.Name)_$($Application.Version)"
+        if (-not $Application.InstallPath) {
+            $pathParts = $Application.Name.Split('_')
+            $Application.InstallPath = Join-Path $InstallDirectory ($pathParts -join '\')
+        }
+        $Application.BinaryPath = Join-Path $BinariesDirectory "$appBaseName$ext"
+        $Application.StagedPath = Join-Path $StagingDirectory "$appBaseName$ext"
+        $Application.PostInstallPath = Join-Path $PostInstallDirectory "$appBaseName$ext"
+        $this.ProcessInstallationArguments($Application)
+    }
+
+    hidden [void]ProcessInstallationArguments([object]$Application) {
+        $InstallDirectory = $this.ConfigManager.ResolvePath('install')
+        $BinariesDirectory = $this.ConfigManager.ResolvePath('binaries')
+        $StagingDirectory = $this.ConfigManager.ResolvePath('staging')
+        $PostInstallDirectory = $this.ConfigManager.ResolvePath('postInstall')
+        $variables = @{'$Name'=$Application.Name;'$Version'=$Application.Version;'$StagedPath'=$Application.StagedPath;'$InstallPath'=$Application.InstallPath;'$BinariesDirectory'=$BinariesDirectory;'$StagingDirectory'=$StagingDirectory}
+
+        # Process installer arguments
+        if ($Application.InstallerArguments) {
+            $processedArgs = $Application.InstallerArguments | ForEach-Object {
+                $arg = $_
+                foreach ($var in $variables.GetEnumerator()) {$arg = $arg.Replace("`$$($var.Key)", $var.Value)}
+                $arg
+            }
+            $Application.InstallerArguments = $processedArgs
+        }
+
+        # Process uninstaller arguments
+        if ($Application.UninstallerArguments) {
+            $processedArgs = $Application.UninstallerArguments | ForEach-Object {
+                $arg = $_
+                foreach ($var in $variables.GetEnumerator()) {$arg = $arg.Replace("`$$($var.Key)", $var.Value)}
+                $arg
+            }
+            $Application.UninstallerArguments = $processedArgs
+        }
     }
 
     [bool]Download([ApplicationConfig]$app) {
+        $this.InitializeApplication($app)
         if(-not $app.Download) { return $true }
         $cacheKey = "$($app.Name)_$($app.Version)"
-        $cachePath = Join-Path $this.BinariesDirectory "$cacheKey.cache"
+        $cachePath = Join-Path $this.ConfigManager.ResolvePath('binaries') "$cacheKey.cache"
         # Check cache
         if (Test-Path $cachePath) {
             $cached = Get-Content $cachePath | ConvertFrom-Json
@@ -117,6 +161,7 @@ class ApplicationManager {
     
     # Implementation methods for different package types...
     hidden [bool]DownloadWingetPackage([ApplicationConfig]$app) {
+        $this.Logger.Log("DBUG", "Binary path: $($app.BinaryPath)")
         $TempBinaryPath = $($app.BinaryPath).Replace([System.IO.Path]::GetExtension($app.BinaryPath), "")
         $this.Logger.Log("INFO", "Downloading $($app.Name) from winget to $TempBinaryPath")
         
@@ -132,7 +177,7 @@ class ApplicationManager {
             # Move downloaded files to binary directory
             Get-ChildItem -Path $TempBinaryPath | ForEach-Object {
                 $NewFileName = if($_.PSIsContainer) {"$($app.Name)_$($app.Version)_$($_.Name)"} else {"$($app.Name)_$($app.Version)$($_.Extension)"}
-                $destinationPath = Join-Path -Path $this.BinariesDirectory -ChildPath $NewFileName
+                $destinationPath = Join-Path -Path $this.ConfigManager.ResolvePath('binaries') -ChildPath $NewFileName
                 $this.SystemOps.MoveFolder($_.FullName, $destinationPath)
             }
             Remove-Item -Path $TempBinaryPath -Recurse -Force
@@ -230,13 +275,10 @@ function New-ApplicationManager {
         [Parameter(Mandatory=$true)][object]$SystemOps,
         [Parameter(Mandatory=$true)][object]$StateManager,
         [Parameter(Mandatory=$true)][object]$Logger,
-        [Parameter(Mandatory=$true)][string]$ScriptsDir,
-        [Parameter(Mandatory=$true)][string]$BinDir,
-        [Parameter(Mandatory=$true)][string]$StagingDir,
-        [Parameter(Mandatory=$true)][string]$PostInstallDir
+        [Parameter(Mandatory=$true)][object]$ConfigManager
     )
     
-    return [ApplicationManager]::new($SystemOps, $StateManager, $Logger, $ScriptsDir, $BinDir, $StagingDir, $PostInstallDir)
+    return [ApplicationManager]::new($SystemOps, $StateManager, $Logger, $ConfigManager)
 }
 
 Export-ModuleMember -Function New-ApplicationManager

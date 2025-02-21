@@ -12,7 +12,14 @@ class StateManager {
 
     [void]LoadState() {
         if (Test-Path $this.StateFile) {
-            $this.State = Get-Content $this.StateFile | ConvertFrom-Json -AsHashtable
+            $jsonContent = Get-Content $this.StateFile | ConvertFrom-Json
+            # Convert PSCustomObject to hashtable
+            $this.State = @{}
+            if ($jsonContent) {
+                $jsonContent.PSObject.Properties | ForEach-Object {
+                    $this.State[$_.Name] = $_.Value
+                }
+            }
         }
     }
 

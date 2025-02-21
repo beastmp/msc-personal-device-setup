@@ -1,4 +1,3 @@
-#Requires -RunAsAdministrator
 #region PARAMS
 [CmdletBinding()]
 param (
@@ -57,6 +56,8 @@ try {
     $logger = New-LogManager -LogPath (Join-Path $configManager.ResolvePath('logs') "application.log") `
                             -TelemetryPath (Join-Path $configManager.ResolvePath('logs') "telemetry.log")
     Write-Host "LogManager initialized successfully"
+
+    $logger.Log("WARN", "TESTING LOGGER")
     
     $systemOps = New-SystemOperations -BinDir $configManager.ResolvePath("binaries") `
                                     -StagingDir $configManager.ResolvePath("staging") `
@@ -809,24 +810,14 @@ function Invoke-UninstallSoftware {[CmdletBinding()]param([Parameter()][object]$
 }
 #endregion
 #region MAIN
-function Invoke-MainAction {
-    [CmdletBinding()]
-    param([Parameter()][object]$SoftwareList)
-    
+function Invoke-MainAction {[CmdletBinding()]param([Parameter()][object]$SoftwareList)
     switch ($Action) {
         "Install" {
             if (-not (Invoke-MainInstallPreStep)) { return $false }
-            
             if ($ParallelDownloads) {
-                # Handle parallel downloads
                 $downloadJobs = @()
                 foreach ($app in $SoftwareList) {
-                    if (ShouldProcessApp $app) {
-                        $downloadJobs += Start-Job -ScriptBlock {
-                            param($app)
-                            $appManager.Download($app)
-                        } -ArgumentList $app
-                    }
+                    if (ShouldProcessApp $app) {$downloadJobs += Start-Job -ScriptBlock {param($app);$appManager.Download($app)} -ArgumentList $app}
                 }
                 Wait-Job $downloadJobs | Receive-Job
             }
@@ -916,30 +907,28 @@ $ScriptStart = Get-Date
 
 try {
     Log-Message "PROG" "Beginning main script execution..."
-    $telemetryManager.TrackEvent("ScriptStart", @{
+    $logger.TrackEvent("ScriptStart", @{
         Action = $Action
         TestingMode = $TestingMode
     })
-    
+
     $SoftwareList = Invoke-MainPreStep
-    foreach ($app in $SoftwareList) {
-        $stateManager.ValidateApplication($app)
-    }
+    # foreach ($app in $SoftwareList) {
+    #     $stateManager.ValidateApplication($app)
+    # }
     
-    # Process software by installation type
-    @{
-        Winget = { $_ | Where-Object { $_.InstallationType -eq "Winget" }}
-        PSModule = { $_ | Where-Object { $_.InstallationType -eq "PSModule" }}
-        Other = { $_ | Where-Object { $_.InstallationType -eq "Other" }}
-        Manual = { $_ | Where-Object { $_.InstallationType -eq "Manual" }}
-    }.GetEnumerator() | ForEach-Object {
-        $typeName = $_.Key
-        $typeFilter = $_.Value
+    # Process software by installation type - Fix the loop structure
+    foreach ($installType in @('Winget', 'PSModule', 'Other', 'Manual')) {
+        $currentType = $installType
+        $logger.Log("INFO", "Processing $currentType applications")
         
-        $typeList = $SoftwareList | & $typeFilter
+        $typeList = $SoftwareList | Where-Object { $_.InstallationType -eq $currentType }
+        
         if ($typeList) {
-            $logger.Log("INFO", "Processing $typeName applications")
+            $logger.Log("INFO", "Found $($typeList.Count) $currentType applications to process")
             Invoke-MainAction -SoftwareList $typeList
+        } else {
+            $logger.Log("INFO", "No $currentType applications found")
         }
     }
     
