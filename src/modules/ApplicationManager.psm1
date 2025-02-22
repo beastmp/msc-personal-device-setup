@@ -48,7 +48,7 @@ class ApplicationManager {
     }
 
     [ApplicationConfig]InitializeApplication([ApplicationConfig]$app) {
-        $this.Logger.Log("INFO", "Initializing application paths for $($app.Name)")
+        $this.Logger.Log("VRBS", "Initializing application paths for $($app.Name)")
         try {
             $InstallDirectory = $this.ConfigManager.ResolvePath('install')
             $BinariesDirectory = $this.ConfigManager.ResolvePath('binaries')
@@ -80,7 +80,7 @@ class ApplicationManager {
             $this.Logger.Log("VRBS", "Set post-install path to: $($app.PostInstallPath)")
 
             $app = $this.ProcessInstallationArguments($app)
-            $this.Logger.Log("INFO", "Application paths initialized successfully")
+            $this.Logger.Log("VRBS", "Application paths initialized successfully")
         }
         catch {$this.Logger.Log("ERRR", "Failed to initialize application paths: $_");throw}
         return $app
@@ -219,9 +219,9 @@ class ApplicationManager {
         if(Get-Command $functionName -ErrorAction SilentlyContinue) {
             $this.Logger.Log("INFO", "Starting $("${appName} ${prefix}${action}") step...")
             $success = if($app){& $functionName -Application $app}else{& $functionName}
+            if ($success) {$this.Logger.Log("SCSS", "$("${appName} ${prefix}${action}") step completed successfully")}
+            else {$this.Logger.Log("ERRR", "$("${appName} ${prefix}${action}") step failed")}
         } else {$this.Logger.Log("VRBS", "$("${appName} ${prefix}${action}") step not defined - SKIPPING")}
-        if ($success) {$this.Logger.Log("SCSS", "$("${appName} ${prefix}${action}") step completed successfully")}
-        else {$this.Logger.Log("ERRR", "$("${appName} ${prefix}${action}") step failed")}
         return $success
     }
     

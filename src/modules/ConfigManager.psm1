@@ -23,7 +23,7 @@ class ConfigManager {
         try {
             $this.Config = Get-Content -Raw -Path $configPath | ConvertFrom-Json
             $this.ValidateConfig()
-            $this.Logger.Log("INFO", "Configuration loaded successfully")
+            $this.Logger.Log("SCSS", "Configuration loaded successfully")
         }
         catch {$this.Logger.Log("ERRR", "Failed to load configuration: $_");throw}
     }
@@ -67,7 +67,7 @@ class ConfigManager {
     }
 
     [object]GetSoftwareList([string]$dirPath, [string]$fileName) {
-        $this.Logger.Log("INFO", "Getting software list from: $dirPath\$fileName")
+        $this.Logger.Log("VRBS", "Getting software list from: $dirPath\$fileName")
         $softwareListPath = Join-Path $dirPath $fileName
         if(-not(Test-Path $softwareListPath)){$this.Logger.Log("ERRR", "Software list JSON file not found at $softwareListPath");return $null}
         try {

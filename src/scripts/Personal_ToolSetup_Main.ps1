@@ -531,7 +531,6 @@ try {
             Invoke-MainAction -SoftwareList $typeList
         } else {$logger.Log("INFO", "No $currentType applications found")}
     }
-    Invoke-MainPostStep
 } catch {$logger.TrackEvent("ScriptError", @{Error = $_.Exception.Message;Stack = $_.ScriptStackTrace});throw}
 finally {
     $stateManager.CleanupOldStates(30)
