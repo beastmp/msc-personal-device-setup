@@ -11,7 +11,7 @@ class SystemOperations {
     [string]$InstallDirectory
     
     # Process management properties
-    [int]$DefaultTimeout = 300
+    [int]$DefaultTimeout = 1800 # 30 minutes
     [int]$RetryCount = 3
     [int]$RetryDelay = 10
     
