@@ -21,12 +21,9 @@ param (
 )
 #endregion
 
-# Resolve module paths and import modules
 $modulePath = Split-Path -Parent $PSScriptRoot
 $modulePath = Join-Path $modulePath "modules"
-Write-Host "Module path resolved to: $modulePath"
-
-# Import modules in dependency order with full paths
+Write-Host "[$(Get-Date -f 'yyyyMMdd_HHmmss')] [VRBS] Module path resolved to: $modulePath" -ForegroundColor "Cyan"
 $moduleOrder = @(
     @{Name="ConfigManager"; Path=Join-Path $modulePath "ConfigManager.psm1"},
     @{Name="SystemOperations"; Path=Join-Path $modulePath "SystemOperations.psm1"},
@@ -34,15 +31,11 @@ $moduleOrder = @(
     @{Name="StateManager"; Path=Join-Path $modulePath "StateManager.psm1"},
     @{Name="ApplicationManager"; Path=Join-Path $modulePath "ApplicationManager.psm1"}
 )
-
-# Load all modules first
 foreach ($module in $moduleOrder) {
-    Write-Host "Loading module: $($module.Name) from $($module.Path)"
-    if (Test-Path $module.Path) {Import-Module $module.Path -Force -Verbose}
-    else {throw "Module file not found: $($module.Path)"}
+    Write-Host "[$(Get-Date -f 'yyyyMMdd_HHmmss')] [INFO] Loading module: $($module.Name) from $($module.Path)"
+    if (Test-Path $module.Path) {Import-Module $module.Path -Force 4> $null}
+    else {Write-Host "[$(Get-Date -f 'yyyyMMddHHmmss')] [ERRR] Module file not found: $($module.Path)" -ForegroundColor "Red";throw}
 }
-
-# Initialize managers
 try {
     $logger = New-LogManager
     $logger.Log("INFO", "Basic logger created")
@@ -72,8 +65,6 @@ try {
     $logger.Log("INFO", "ApplicationManager initialized successfully")
 }
 catch {if($logger){$logger.Log("ERRR", "Failed to initialize managers: $_")}else{Write-Error "Failed to initialize managers: $_"};throw}
-
-# Load and validate configuration
 try {
     $script:Config = Get-Content -Raw -Path $ConfigPath | ConvertFrom-Json
     $requiredProps = @('directories', 'files', 'logging')
@@ -89,7 +80,6 @@ $script:PostInstallDirectory = $Config.directories.postInstall
 $script:LogDirectory = $Config.directories.logs
 $script:SoftwareListFileName = $Config.files.softwareList
 
-# Add cleanup on script exit
 #trap {Write-Error $_;exit 1}
 
 function Invoke-MainPreStep {[CmdletBinding()]param()
@@ -119,9 +109,6 @@ function Install-Winget {[CmdletBinding()]param()
 #region     STEP HELPERS
 function Invoke-MainInstallPreStep {[CmdletBinding()]param()
     $logger.Log("INFO","Starting main install pre-step...")
-    foreach ($dir in @($BinariesDirectory, $StagingDirectory, $PostInstallDirectory)) {
-        if (-not (Add-Folders -DirPath $dir)) {$logger.Log("ERRR","Failed to add directory $dir");return $false}
-    }
     $logger.Log("INFO","Main install pre-step complete")
     return $true
 }
@@ -626,77 +613,29 @@ function Invoke-MainAction {[CmdletBinding()]param([Parameter()][object]$Softwar
 }
 
 # Helper function to determine if an app should be processed
-function ShouldProcessApp {
-    param([Parameter()][object]$app)
-    return (-not $TestingMode) -or (-not $app.TestingComplete)
-}
+function ShouldProcessApp {param([Parameter()][object]$app);return (-not $TestingMode) -or (-not $app.TestingComplete)}
 
-if ($CleanupCache) {
-    Remove-OldCache
-}
-
-if (-Not (Test-Path -Path $LogDirectory)) {
-    New-Item -ItemType Directory -Path $LogDirectory -Force | Out-Null
-}
-
-# Remove transcript-related code and just set debug preference
-if ($PSBoundParameters['Debug']) {
-    $DebugPreference = 'Continue'
-}
-
-$ScriptStart = Get-Date
-
+if ($CleanupCache) {Remove-OldCache}
+if ($PSBoundParameters['Debug']) {$DebugPreference = 'Continue'}
+$logger.TrackEvent("ScriptStart", @{Action = $Action;TestingMode = $TestingMode})
 try {
     $logger.Log("PROG","Beginning main script execution...")
-    $logger.TrackEvent("ScriptStart", @{
-        Action = $Action
-        TestingMode = $TestingMode
-    })
-    
     $SoftwareList = Invoke-MainPreStep
-    if ($ApplicationName) {
-        $SoftwareList = $SoftwareList | Where-Object { 
-            $_.Name -eq $ApplicationName -and 
-            (-not $ApplicationVersion -or $_.Version -eq $ApplicationVersion)
-        }
-    }
-    # Process software by installation type - Fix the loop structure
+    if ($ApplicationName) {$SoftwareList = $SoftwareList | Where-Object {$_.Name -eq $ApplicationName -and (-not $ApplicationVersion -or $_.Version -eq $ApplicationVersion)}}
     foreach ($installType in @('Winget', 'PSModule', 'Other', 'Manual')) {
         $currentType = $installType
         $logger.Log("INFO", "Processing $currentType applications")
-        
         $typeList = $SoftwareList | Where-Object { $_.InstallationType -eq $currentType  -and (ShouldProcessApp $_)}
-        
         if ($typeList) {
             $logger.Log("INFO", "Found $($typeList.Count) $currentType applications to process")
             Invoke-MainAction -SoftwareList $typeList
-        } else {
-                $logger.Log("INFO", "No $currentType applications found")
-            }
-        }
-        
-        Invoke-MainPostStep
-        
-        $logger.TrackEvent("ScriptEnd", @{
-            Success = $true
-            Duration = $ScriptTimeSpan.TotalSeconds
-        })
+        } else {$logger.Log("INFO", "No $currentType applications found")}
     }
-catch {
-    $logger.TrackEvent("ScriptError", @{
-        Error = $_.Exception.Message
-        Stack = $_.ScriptStackTrace
-    })
-    throw
-}
+    Invoke-MainPostStep
+} catch {$logger.TrackEvent("ScriptError", @{Error = $_.Exception.Message;Stack = $_.ScriptStackTrace});throw}
 finally {
     $stateManager.CleanupOldStates(30)
-    if (Test-Path $StagingDirectory) {
-        Remove-Item -Path $StagingDirectory -Recurse -Force -ErrorAction SilentlyContinue
-    }
-    
-    $ScriptEnd = Get-Date
-    $ScriptTimeSpan = New-TimeSpan -Start $ScriptStart -End $ScriptEnd
-    $logger.Log("PROG", $("Main script execution completed in {0:00}:{1:00}:{2:00}:{3:00}" -f $ScriptTimeSpan.days, $ScriptTimeSpan.hours, $ScriptTimeSpan.minutes, $ScriptTimeSpan.seconds))
+    if (Test-Path $StagingDirectory) {Remove-Item -Path $StagingDirectory -Recurse -Force -ErrorAction SilentlyContinue}
+    $logger.TrackEvent("ScriptEnd", @{Success = $true;Duration = $ScriptTimeSpan.TotalSeconds;})
 }
 #endregion
