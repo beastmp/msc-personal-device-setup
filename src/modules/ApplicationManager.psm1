@@ -194,7 +194,6 @@ class ApplicationManager {
         return $success
     }
     
-    # Private helper methods
     hidden [bool]InvokeStep([ApplicationConfig]$app,[string]$stepName) {
         $functionName = "Invoke-${stepName}_$($app.Name)"
         if(Get-Command $functionName -ERRRAction SilentlyContinue) {
@@ -204,7 +203,6 @@ class ApplicationManager {
         return $true
     }
     
-    # Implementation methods for different package types...
     hidden [bool]DownloadWingetPackage([ApplicationConfig]$app) {
         $TempBinaryPath = $($app.BinaryPath).Replace([System.IO.Path]::GetExtension($app.BinaryPath), "")
         $this.Logger.Log("INFO", "Downloading $($app.Name) from winget to $TempBinaryPath")
