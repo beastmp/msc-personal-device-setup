@@ -158,6 +158,29 @@ class SystemOperations {
     }
 
     [bool]IsProcessRunning([string]$processName){return $null -ne (Get-Process -Name $processName -ErrorAction SilentlyContinue)}
+
+    # Environment Management
+    [bool]SetEnvironmentVariable([string]$Name, [string]$Value) {
+        try {
+            [System.Environment]::SetEnvironmentVariable($Name, $Value, [System.EnvironmentVariableTarget]::Machine)
+            $this.Logger.Log("VRBS", "Environment variable $Name set to $Value")
+            return $true
+        }
+        catch {$this.Logger.Log("ERRR", "Unable to set environment variable $Name to $Value: $_");return $false}
+    }
+
+    [bool]AddToPath([string]$Value) {
+        $envPath = [System.Environment]::GetEnvironmentVariable("Path", [System.EnvironmentVariableTarget]::Machine)
+        if ($envPath -notlike "*$Value*") {
+            try {
+                [System.Environment]::SetEnvironmentVariable("Path", "$envPath;$Value", [System.EnvironmentVariableTarget]::Machine)
+                $this.Logger.Log("VRBS", "Added $Value to PATH")
+                return $true
+            }
+            catch {$this.Logger.Log("ERRR", "Unable to add $Value to PATH: $_");return $false}
+        }
+        return $true
+    }
 }
 
 function New-SystemOperations {

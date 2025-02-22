@@ -27,7 +27,7 @@ Write-Host "Module path resolved to: $modulePath"
 
 # Import modules in dependency order with full paths
 $moduleOrder = @(
-        @{Name="ConfigManager"; Path=Join-Path $modulePath "ConfigManager.psm1"},
+    @{Name="ConfigManager"; Path=Join-Path $modulePath "ConfigManager.psm1"},
     @{Name="SystemOperations"; Path=Join-Path $modulePath "SystemOperations.psm1"},
     @{Name="Monitoring"; Path=Join-Path $modulePath "Monitoring.psm1"},
     @{Name="StateManager"; Path=Join-Path $modulePath "StateManager.psm1"},
@@ -37,31 +37,24 @@ $moduleOrder = @(
 # Load all modules first
 foreach ($module in $moduleOrder) {
     Write-Host "Loading module: $($module.Name) from $($module.Path)"
-    if (Test-Path $module.Path) {
-        Import-Module $module.Path -Force -Verbose
-    } else {
-        throw "Module file not found: $($module.Path)"
-    }
+    if (Test-Path $module.Path) {Import-Module $module.Path -Force -Verbose}
+    else {throw "Module file not found: $($module.Path)"}
 }
 
 # Initialize managers
 try {
-    # Create logger first with no paths
     $logger = New-LogManager
     $logger.Log("INFO", "Basic logger created")
     
-    # Create config manager with logger
     $configManager = New-ConfigManager -ConfigPath $ConfigPath -Logger $logger
     $logger.Log("INFO", "ConfigManager initialized successfully")
     
-    # Now initialize logger with proper paths
     $logger.Initialize(
         (Join-Path $configManager.ResolvePath('logs') "application.log"),
         (Join-Path $configManager.ResolvePath('logs') "telemetry.log")
     )
     $logger.Log("INFO", "Logger fully initialized with proper paths")
     
-    # Initialize remaining managers with logger
     $stateManager = New-StateManager -StateFile $configManager.GetStatePath() -Logger $logger
     $logger.Log("INFO", "StateManager initialized successfully")
     
@@ -77,15 +70,7 @@ try {
                                        -ConfigManager $configManager
     $logger.Log("INFO", "ApplicationManager initialized successfully")
 }
-catch {
-    if ($logger) {
-        $logger.Log("ERRR", "Failed to initialize managers: $_")
-    }
-    else {
-        Write-Error "Failed to initialize managers: $_"
-    }
-    throw
-}
+catch {if($logger){$logger.Log("ERRR", "Failed to initialize managers: $_")}else{Write-Error "Failed to initialize managers: $_"};throw}
 
 # Load and validate configuration
 try {
@@ -116,41 +101,8 @@ function Get-LogFileName {param([Parameter()][ValidateSet("Log","Transcript")][s
 }
 #endregion
 #region     ENVIRONMENT HELPERS
-function Set-EnvironmentVariable {[CmdletBinding()]param([Parameter()][string]$Name,[Parameter()][string]$Value)
-    try{
-        [System.Environment]::SetEnvironmentVariable($Name, $Value, [System.EnvironmentVariableTarget]::Machine)
-        $logger.Log("VRBS","Environment variable $Name set to $Value")
-    }
-    catch{$logger.Log("ERRR","Unable to set environment variable $Name to $Value"); return $false}
-    return $true
-}
-
-function Add-ToPath {[CmdletBinding()]param([Parameter()][string]$Value)
-    $envPath = [System.Environment]::GetEnvironmentVariable("Path", [System.EnvironmentVariableTarget]::Machine)
-    if ($envPath -notlike "*$Value*") {
-        try{[System.Environment]::SetEnvironmentVariable("Path", "$envPath;$Value", [System.EnvironmentVariableTarget]::Machine); $logger.Log("VRBS","Added $Value to PATH")}
-        catch{$logger.Log("ERRR","Unable to add $Value to PATH"); return $false}
-    }
-    return $true
-}
 #endregion
 #region     FILE SYSTEM HELPERS
-function Add-Folders {[CmdletBinding()]param([Parameter()][string]$DirPath)
-    if (-Not (Test-Path -Path $DirPath)) {
-        try{New-Item -ItemType Directory -Path $DirPath -Force | Out-Null; $logger.Log("VRBS","$DirPath directory created successfully")}
-        catch{$logger.Log("ERRR","Unable to create $DirPath directory"); return $false}
-    }
-    return $true
-}
-
-function Add-SymLink {[CmdletBinding()]param([Parameter()][string]$SourcePath,[Parameter()][string]$TargetPath)
-    Add-Folders $TargetPath
-    Add-Folders $(Split-Path $SourcePath -Parent)
-    $logger.Log("VRBS","Creating $TargetPath(Actual) to $SourcePath(Link) symbolic link")
-    try{cmd "/c" mklink "/J" $SourcePath $TargetPath; $logger.Log("VRBS","$TargetPath(Actual) to $SourcePath(Link) symbolic link created successfully")}
-    catch{$logger.Log("ERRR","Unable to create $TargetPath symbolic link"); return $false}
-    return $true
-}
 
 function Move-Folder {[CmdletBinding()]param([Parameter()][string]$InstallDir,[Parameter()][string]$Version="",[Parameter()][string]$Prefix="")
     $sourceDir = "${InstallDir}\${Prefix}${Version}"
@@ -304,7 +256,7 @@ function Invoke-WithRetry {[CmdletBinding()]param([Parameter(Mandatory)][scriptb
             if($attempt -eq $MaxAttempts){$logger.Log("ERRR","Failed to $Activity after $MaxAttempts attempts: $_");throw}
             $logger.Log("WARN","Attempt $attempt failed: $_")
             Start-Sleep -Seconds $DelaySeconds
-            $attempt++
+            $attempt++ 
         }
     }
 }
