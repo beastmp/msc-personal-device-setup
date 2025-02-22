@@ -93,34 +93,15 @@ $script:SoftwareListFileName = $Config.files.softwareList
 
 #region HELPERS
 #region     LOG HELPERS
-function Get-LogFileName {param([Parameter()][ValidateSet("Log","Transcript")][string]$LogType,[Parameter()][string]$Action,[Parameter()][string]$TargetName,[Parameter()][string]$Version)
-    $ScriptName = $(Split-Path $MyInvocation.PSCommandPath -Leaf).Replace(".ps1", "")
-    $DateTime   = Get-Date -f 'yyyyMMddHHmmss'
-    $FileName   = $Config.logging.fileNameFormat.Replace("{LogType}", $LogType).Replace("{ScriptName}", $ScriptName).Replace("{Action}", $Action).Replace("{TargetName}", $TargetName).Replace("{Version}", $Version).Replace("{DateTime}", $DateTime)
-    return $FileName
-}
 #endregion
-#region     ENVIRONMENT HELPERS
-#endregion
-#region     FILE SYSTEM HELPERS
-# Remove the Move-Folder function as it's now handled by SystemOperations
-# Update any calls to Move-Folder to use $systemOps.MoveFolder instead
 
-# For example, change:
-# Move-Folder -InstallDir $dir -Version $version -Prefix $prefix
-# To:
-# $systemOps.MoveFolder($dir, $version, $prefix)
-
-function Get-SoftwareList {[CmdletBinding()]param([Parameter()][string]$DirPath,[Parameter()][string]$FileName)
-    $logger.Log("INFO","Getting software list From: $DirPath\$FileName")
-    $SoftwareListPath = "$DirPath\$FileName"
-    if (-Not (Test-Path $SoftwareListPath)) {$logger.Log("ERRR","Software list JSON file not found at $SoftwareListPath"); return $null}
-    try{
-        $SoftwareList = Get-Content -Raw -Path $SoftwareListPath | ConvertFrom-Json
-        $logger.Log("SCSS","Software list successfully loaded")
-        return $SoftwareList
-    }
-    catch{$logger.Log("ERRR","Unable to load software list"); return $null}
+function Invoke-MainPreStep {[CmdletBinding()]param()
+    $logger.Log("INFO", "Starting main pre-step...")
+    if (-not (Install-Winget)) {$logger.Log("ERRR", "Failed to install WinGet"); return $false}
+    $SoftwareList = $configManager.GetSoftwareList($ScriptsDirectory, $SoftwareListFileName)
+    if (-not $SoftwareList) {$logger.Log("ERRR", "No software found for specified environment and server type."); return $false}
+    $logger.Log("INFO", "Main pre-step complete")
+    return $SoftwareList
 }
 
 function Save-SoftwareListApplication {[CmdletBinding()]param([Parameter()][string]$DirPath,[Parameter()][string]$FileName,[Parameter()][object]$Application)
@@ -141,8 +122,6 @@ function Save-SoftwareListApplication {[CmdletBinding()]param([Parameter()][stri
             $_.ProcessID = $Application.ProcessID
             $_.InstallerArguments = $Application.InstallerArguments
             $_.UninstallerArguments = $Application.UninstallerArguments
-            # $_.Test_InstallPath = $Application.Test_InstallPath
-            # $_.Test_MachineScope = $Application.Test_MachineScope
         }
         $SoftwareList | ConvertTo-Json -Depth 10 | Set-Content -Path $SoftwareListPath
         $logger.Log("INFO","Software list successfully updated and saved")
@@ -172,7 +151,7 @@ function Install-Winget {[CmdletBinding()]param()
 function Invoke-MainPreStep {[CmdletBinding()]param()
     $logger.Log("INFO","Starting main pre-step...")
     if (-not (Install-Winget)) {$logger.Log("ERRR","Failed to install WinGet"); return $false}
-    $SoftwareList = Get-SoftwareList -DirPath $ScriptsDirectory -FileName $SoftwareListFileName
+    $SoftwareList = $configManager.GetSoftwareList($ScriptsDirectory, $SoftwareListFileName)
     if (-Not $SoftwareList) {$logger.Log("ERRR","No software found for specified environment and server type."); return $false}
     $logger.Log("INFO","Main pre-step complete")
     return $SoftwareList
@@ -363,7 +342,7 @@ function Invoke-Test_WingetInstallVersion {[CmdletBinding()]param([Parameter()][
             $logger.Log("SCSS","Successfully installed $($Application.Name) version $version at $($Application.InstallPath)")
             $InstallArgumentsString = "--version;$version"
             if($Application.InstallerArguments -notlike "*$InstallArgumentsString*") {$Application.InstallerArguments = $Application.InstallerArguments + ";$InstallArgumentsString"}
-            Save-SoftwareListApplication -DirPath $ScriptsDirectory -FileName $SoftwareListFileName -Application $Application
+            $configManager.SaveSoftwareListApplication($ScriptsDirectory, $SoftwareListFileName, $Application)
             $UninstallArguments = @("--silent","--force","--disable-interactivity","--ignore-warnings")
             Invoke-Process -Path "winget" -Action "uninstall" -Application @("--id",$Application.ApplicationID) -Arguments $UninstallArguments
             return $true
@@ -443,7 +422,7 @@ function Invoke-Test_WingetInstallPath {[CmdletBinding()]param([Parameter()][obj
     #     }
 
         $Application.Test_InstallPath=$false
-        Save-SoftwareListApplication -DirPath $ScriptsDirectory -FileName $SoftwareListFileName -Application $Application
+        $configManager.SaveSoftwareListApplication($ScriptsDirectory, $SoftwareListFileName, $Application)
     }
     return $ReturnStatus
 }
@@ -470,7 +449,7 @@ function Invoke-Test_WingetMachineScope {[CmdletBinding()]param([Parameter()][ob
             $ReturnStatus = $false
         }
         $Application.Test_MachineScope=$false
-        Save-SoftwareListApplication -DirPath $ScriptsDirectory -FileName $SoftwareListFileName -Application $Application
+        $configManager.SaveSoftwareListApplication($ScriptsDirectory, $SoftwareListFileName, $Application)
         if($Application.ProcessID){Invoke-KillProcess $Application.ProcessID}
         $UninstallArguments = @("--silent","--force","--disable-interactivity","--ignore-warnings")
         Invoke-Process -Path "winget" -Action "uninstall" -Application @("--id",$Application.ApplicationID) -Arguments $UninstallArguments
@@ -755,7 +734,8 @@ if ($CleanupCache) {
 if (-Not (Test-Path -Path $LogDirectory)) {New-Item -ItemType Directory -Path $LogDirectory -Force | Out-Null}
 $HostName   = hostname
 $Version    = $PSVersionTable.PSVersion.ToString()
-$FileName   = Get-LogFileName -LogType "Transcript" -Action $Action -TargetName $HostName -Version $Version
+$logger.SetLogFileFormat($Config.logging.fileNameFormat) # Set the format from config
+$FileName = $logger.GetLogFileName("Transcript", $Action, $HostName, $Version)
 $FilePath   = Join-Path -Path $LogDirectory -ChildPath $FileName
 Start-Transcript -IncludeInvocationHeader -NoClobber -Path $FilePath
 if ($PSBoundParameters['Debug']) {$DebugPreference = 'Continue'}

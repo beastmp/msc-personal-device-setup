@@ -65,6 +65,63 @@ class ConfigManager {
         $expandedPath = [System.Environment]::ExpandEnvironmentVariables($path)
         return [System.IO.Path]::GetFullPath($expandedPath)
     }
+
+    [object]GetSoftwareList([string]$dirPath, [string]$fileName) {
+        $this.Logger.Log("INFO", "Getting software list from: $dirPath\$fileName")
+        $softwareListPath = Join-Path $dirPath $fileName
+        
+        if (-not (Test-Path $softwareListPath)) {
+            $this.Logger.Log("ERRR", "Software list JSON file not found at $softwareListPath")
+            return $null
+        }
+        
+        try {
+            $softwareList = Get-Content -Raw -Path $softwareListPath | ConvertFrom-Json
+            $this.Logger.Log("SCSS", "Software list successfully loaded")
+            return $softwareList
+        }
+        catch {
+            $this.Logger.Log("ERRR", "Unable to load software list")
+            return $null
+        }
+    }
+
+    [object]SaveSoftwareListApplication([string]$dirPath, [string]$fileName, [object]$application) {
+        $this.Logger.Log("INFO", "Saving software list to: $dirPath\$fileName")
+        $softwareListPath = Join-Path $dirPath $fileName
+        
+        if (-not (Test-Path $softwareListPath)) {
+            $this.Logger.Log("ERRR", "Software list JSON file not found at $softwareListPath")
+            return $null
+        }
+        
+        try {
+            $softwareList = Get-Content -Raw -Path $softwareListPath | ConvertFrom-Json
+            $softwareList | Where-Object { 
+                $_.Name -eq $application.Name -and $_.Version -eq $application.Version 
+            } | ForEach-Object {
+                $this.Logger.Log("DBUG", "Updating application: $($_.Name)")
+                $_.Download = $application.Download
+                $_.Install = $application.Install
+                $_.MachineScope = $application.MachineScope
+                $_.InstallationType = $application.InstallationType
+                $_.ApplicationID = $application.ApplicationID
+                $_.DownloadURL = $application.DownloadURL
+                $_.ProcessID = $application.ProcessID
+                $_.InstallerArguments = $application.InstallerArguments
+                $_.UninstallerArguments = $application.UninstallerArguments
+            }
+            
+            $softwareList | ConvertTo-Json -Depth 10 | Set-Content -Path $softwareListPath
+            $this.Logger.Log("INFO", "Software list successfully updated and saved")
+            return $softwareList
+        }
+        catch {
+            $this.Logger.Log("ERRR", "Unable to save software list: $_")
+            $this.Logger.Log("DBUG", "Error: $_")
+            return $null
+        }
+    }
 }
 
 function New-ConfigManager{[CmdletBinding()]param([Parameter(Mandatory=$true)][string]$ConfigPath,[Parameter(Mandatory=$true)][object]$Logger)

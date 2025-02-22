@@ -29,9 +29,13 @@ class LogManager {
     [hashtable]$LogLevels
     [hashtable]$Metrics = @{}
     [System.Collections.ArrayList]$Events = @()
+    [string]$LogFileFormat
     
     # Add simple constructor for basic initialization
-    LogManager(){$this.LogLevels=@{INFO=0;SCSS=1;ERRR=2;WARN=3;DBUG=4;VRBS=5;PROG=6}}
+    LogManager() {
+        $this.LogLevels=@{INFO=0;SCSS=1;ERRR=2;WARN=3;DBUG=4;VRBS=5;PROG=6}
+        $this.LogFileFormat = "{LogType}_{ScriptName}_{Action}_{TargetName}_{Version}_{DateTime}.log"
+    }
     
     # Keep existing constructor as an initialization method
     [void]Initialize([string]$logPath, [string]$telemetryPath) {
@@ -64,6 +68,22 @@ class LogManager {
         $logEntry | ConvertTo-Json | Add-Content -Path $this.LogPath -ErrorAction Stop
     }
     
+    # Add method to set custom format
+    [void]SetLogFileFormat([string]$format) {
+        $this.LogFileFormat = $format
+    }
+
+    [string]GetLogFileName([string]$LogType, [string]$Action, [string]$TargetName, [string]$Version) {
+        $ScriptName = $(Split-Path $MyInvocation.PSCommandPath -Leaf).Replace(".ps1", "")
+        $DateTime = Get-Date -f 'yyyyMMddHHmmss'
+        
+        return $this.LogFileFormat.Replace("{LogType}", $LogType)
+                                .Replace("{ScriptName}", $ScriptName)
+                                .Replace("{Action}", $Action)
+                                .Replace("{TargetName}", $TargetName)
+                                .Replace("{Version}", $Version)
+                                .Replace("{DateTime}", $DateTime)
+    }
     
     [void]TrackEvent([string]$name,[hashtable]$properties) {
         $newEvent=@{Timestamp=Get-Date;Name=$name;Properties=$properties}
