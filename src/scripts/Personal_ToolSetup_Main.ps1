@@ -1,3 +1,10 @@
+<#
+.SYNOPSIS
+    Main installation script for personal device setup.
+.DESCRIPTION
+    Manages installation, uninstallation, and testing of applications using various package managers.
+#>
+
 #region PARAMS
 [CmdletBinding()]
 param (
@@ -22,7 +29,7 @@ param (
 
 $modulePath = Split-Path -Parent $PSScriptRoot
 $modulePath = Join-Path $modulePath "modules"
-Write-Verbose "[$(Get-Date -f 'yyyyMMdd_HHmmss')] [VRBS] Module path resolved to: $modulePath"
+if ($PSBoundParameters['Verbose']) {Write-Host "[$(Get-Date -f 'yyyyMMdd_HHmmss')] [VRBS] Module path resolved to: $modulePath" -ForegroundColor "DarkYellow"}
 $moduleOrder = @(
     @{Name="ConfigManager"; Path=Join-Path $modulePath "ConfigManager.psm1"},
     @{Name="SystemOperations"; Path=Join-Path $modulePath "SystemOperations.psm1"},
@@ -30,7 +37,7 @@ $moduleOrder = @(
     @{Name="ApplicationManager"; Path=Join-Path $modulePath "ApplicationManager.psm1"}
 )
 foreach ($module in $moduleOrder) {
-    Write-Verbose "[$(Get-Date -f 'yyyyMMdd_HHmmss')] [VRBS] Loading module: $($module.Name) from $($module.Path)"
+    if ($PSBoundParameters['Verbose']) {Write-Host "[$(Get-Date -f 'yyyyMMdd_HHmmss')] [VRBS] Loading module: $($module.Name) from $($module.Path)" -ForegroundColor "DarkYellow"}
     if (Test-Path $module.Path) {Import-Module $module.Path -Force 4> $null}
     else {Write-Host "[$(Get-Date -f 'yyyyMMddHHmmss')] [ERRR] Module file not found: $($module.Path)" -ForegroundColor "Red";throw}
 }
@@ -55,7 +62,6 @@ try {
     $logger.Log("VRBS", "SystemOperations initialized successfully")
     
     $appManager = New-ApplicationManager -SystemOps $systemOps `
-                                       -StateManager $stateManager `
                                        -Logger $logger `
                                        -ConfigManager $configManager
     $logger.Log("VRBS", "ApplicationManager initialized successfully")
@@ -78,12 +84,6 @@ $script:SoftwareListFileName = $Config.files.softwareList
 
 #trap {Write-Error $_;exit 1}
 
-#region HELPERS
-#region     APPLICATION HELPERS
-#endregion
-#region     STEP HELPERS
-#endregion
-#endregion
 #region TESTING
 function Invoke-Test_WingetInstallVersion {[CmdletBinding()]param([Parameter()][object]$Application)
     $versionList = Find-WinGetPackage -Id $Application.ApplicationID -MatchOption Equals | Select-Object -ExpandProperty AvailableVersions
