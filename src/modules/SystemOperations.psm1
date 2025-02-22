@@ -1,6 +1,8 @@
 using namespace System.Collections
 using namespace System.IO
 
+$script:InitializationLog = @()
+
 class SystemOperations {
     # Add Logger property
     hidden [object]$Logger
@@ -231,7 +233,80 @@ class SystemOperations {
         }
         return $true
     }
+
+    [bool] InstallRequiredPackageProvider([string]$ProviderName) {
+        if(-not (Get-PackageProvider -Name $ProviderName -ErrorAction SilentlyContinue)) {
+            $this.Logger.Log("INFO","Installing $ProviderName package provider...")
+            try {
+                Install-PackageProvider -Name $ProviderName -Force -Confirm:$false | Out-Null
+                $this.Logger.Log("INFO","$ProviderName package provider installed successfully")
+                return $true
+            }
+            catch {
+                $this.Logger.Log("ERRR","Failed to install $ProviderName package provider: $_")
+                return $false
+            }
+        }
+        return $true
+    }
+
+    [bool] InstallWingetProvider() {
+        if(-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+            $this.Logger.Log("INFO","Installing WinGet PowerShell module from PSGallery...")
+            if(-not ($this.InstallRequiredPackageProvider("NuGet"))) {
+                $this.Logger.Log("ERRR","Failed to install NuGet package provider")
+                return $false
+            }
+            try {
+                Install-Module -Name Microsoft.WinGet.Client -Force -Repository PSGallery -Confirm:$false | Out-Null
+                $this.Logger.Log("INFO","Using Repair-WinGetPackageManager cmdlet to bootstrap WinGet...")
+                Repair-WinGetPackageManager -Force
+                Write-Progress -Completed -Activity "make progress bar disappear"
+                $this.Logger.Log("INFO","WinGet installation completed")
+            }
+            catch {
+                $this.Logger.Log("ERRR","Failed to install WinGet: $_")
+                return $false
+            }
+        }
+        return $true
+    }
 }
+
+# Add module initialization script
+$InitializationScript = {
+    # Create temporary logger for initialization
+    $tempLogger = [PSCustomObject]@{
+        Log = {
+            param($Level, $Message)
+            $script:InitializationLog += "[$(Get-Date -f 'yyyyMMdd_HHmmss')] [$Level] $Message"
+        }
+    }
+
+    # Create temporary SystemOperations instance just for initialization
+    $tempSysOps = [SystemOperations]::new("", "", "", $tempLogger, @{
+        execution = @{
+            retry = @{ enabled = $true; maxAttempts = 3; delaySeconds = 5 }
+            parallelProcessing = @{ enabled = $true; maxConcurrentJobs = 3; jobTimeoutSeconds = 300 }
+        }
+    })
+
+    # Silently install required components
+    try {
+        if (-not $tempSysOps.InstallRequiredPackageProvider("NuGet")) {
+            Write-Warning "Failed to install NuGet provider during module initialization"
+        }
+        if (-not $tempSysOps.InstallWingetProvider()) {
+            Write-Warning "Failed to install WinGet during module initialization"
+        }
+    }
+    catch {
+        Write-Warning "Error during SystemOperations initialization: $_"
+    }
+}
+
+# Execute initialization
+. $InitializationScript
 
 function New-SystemOperations {
     [CmdletBinding()]

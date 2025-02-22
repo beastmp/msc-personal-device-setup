@@ -84,18 +84,6 @@ $script:SoftwareListFileName = $Config.files.softwareList
 
 #region HELPERS
 #region     APPLICATION HELPERS
-function Install-Winget {[CmdletBinding()]param()
-    if(-not (Get-Command winget -ErrorAction SilentlyContinue)) {
-        $logger.Log("INFO","Installing WinGet PowerShell module from PSGallery...")
-        Install-PackageProvider -Name NuGet -Force | Out-Null
-        Install-Module -Name Microsoft.WinGet.Client -Force -Repository PSGallery | Out-Null
-        $logger.Log("INFO","Using Repair-WinGetPackageManager cmdlet to bootstrap WinGet...")
-        Repair-WinGetPackageManager
-        Write-Progress -Completed -Activity "make progress bar dissapear"
-        $logger.Log("INFO","Done.")
-    }
-    return $true
-}   
 #endregion
 #region     STEP HELPERS
 function Remove-OldCache {
@@ -518,7 +506,15 @@ if ($PSBoundParameters['Debug']) {$DebugPreference = 'Continue'}
 $logger.TrackEvent("ScriptStart", @{Action = $Action;TestingMode = $TestingMode})
 try {
     $logger.Log("PROG","Beginning main script execution...")
-    if (-not (Install-Winget)) {$logger.Log("ERRR", "Failed to install WinGet"); return $false}
+    $SoftwareList = $configManager.GetSoftwareList($ScriptsDirectory, $SoftwareListFileName)
+    if (-not $SoftwareList) {
+        $logger.Log("ERRR", "No software found for specified environment and server type.")
+        return $false
+    }
+    if (-not ($systemOps.Install-WingetProvider())) {
+        $logger.Log("ERRR", "Failed to install WinGet")
+        return $false
+    }
     $SoftwareList = $configManager.GetSoftwareList($ScriptsDirectory, $SoftwareListFileName)
     if (-not $SoftwareList) {$logger.Log("ERRR", "No software found for specified environment and server type."); return $false}
     if ($ApplicationName) {$SoftwareList = $SoftwareList | Where-Object {$_.Name -eq $ApplicationName -and (-not $ApplicationVersion -or $_.Version -eq $ApplicationVersion)}}
