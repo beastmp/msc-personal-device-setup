@@ -23,7 +23,7 @@ param (
 
 $modulePath = Split-Path -Parent $PSScriptRoot
 $modulePath = Join-Path $modulePath "modules"
-Write-Verbose "[$(Get-Date -f 'yyyyMMdd_HHmmss')] [VRBS] Module path resolved to: $modulePath" -ForegroundColor "Cyan"
+Write-Verbose "[$(Get-Date -f 'yyyyMMdd_HHmmss')] [VRBS] Module path resolved to: $modulePath"
 $moduleOrder = @(
     @{Name="ConfigManager"; Path=Join-Path $modulePath "ConfigManager.psm1"},
     @{Name="SystemOperations"; Path=Join-Path $modulePath "SystemOperations.psm1"},
