@@ -1,3 +1,7 @@
+<#
+.SYNOPSIS
+    Custom installation handlers for specific applications.
+#>
 
 #region PREDOWNLOAD
 # Pre-Download function template: Add _$Application.Name to the end of the function name
@@ -16,40 +20,32 @@ function Invoke-PostDownload_Cookn {[CmdletBinding()]param([Parameter()][object]
 }
 
 function Invoke-PostDownload_DiskDigger {[CmdletBinding()]param([Parameter()][object]$Application)
-    if (-not (Add-Folders -DirPath $Application.InstallPath)) {Log-Message "ERRR" "Failed to add install path" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose; return $false}
-    Log-Message "VRBS" "Executing Copy-Item from $($Application.StagedPath) to $($Application.InstallPath)\$($Application.Name)$([System.IO.Path]::GetExtension($Application.BinaryPath))" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
+    if (-not (Add-Folders -DirPath $Application.InstallPath)) {$logger.Log("ERRR", "Failed to add install path"); return $false}
+    $logger.Log("VRBS", "Executing Copy-Item from $($Application.StagedPath) to $($Application.InstallPath)\$($Application.Name)$([System.IO.Path]::GetExtension($Application.BinaryPath))")
     try{Copy-Item -Path $Application.StagedPath -Destination "$($Application.InstallPath)\$($Application.Name)$([System.IO.Path]::GetExtension($Application.BinaryPath))" -Force}
-    catch{Log-Message "ERRR" "Unable to copy from $($Application.StagedPath) to $($Application.InstallPath)\$($Application.Name)$([System.IO.Path]::GetExtension($Application.BinaryPath))" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose; return $false}
+    catch{$logger.Log("ERRR","Unable to copy from $($Application.StagedPath) to $($Application.InstallPath)\$($Application.Name)$([System.IO.Path]::GetExtension($Application.BinaryPath))"); return $false}
     return $true
 }
 
 function Invoke-PostDownload_NuGet {[CmdletBinding()]param([Parameter()][object]$Application)
-    if (-not (Add-Folders -DirPath $Application.InstallPath)) {Log-Message "ERRR" "Failed to add install path" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose; return $false}
-    Log-Message "INFO" "Starting Post-Download for $($Application.Name) v$($Application.Version)..." -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
-    if (-not (Add-Folders -DirPath $Application.InstallPath)) {Log-Message "ERRR" "Failed to add install path" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose; return $false}
-    Log-Message "VRBS" "Executing Copy-Item from $($Application.StagedPath) to $($Application.InstallPath)\$($Application.Name)$([System.IO.Path]::GetExtension($Application.BinaryPath))" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
+    if (-not ($systemOps.AddFolders($Application.InstallPath))) {$logger.Log("ERRR", "Failed to add install path");return $false}
+    $logger.Log("VRBS", "Executing Copy-Item from $($Application.StagedPath) to $($Application.InstallPath)\$($Application.Name)$([System.IO.Path]::GetExtension($Application.BinaryPath))")
     try{Copy-Item -Path $Application.StagedPath -Destination "$($Application.InstallPath)\$($Application.Name)$([System.IO.Path]::GetExtension($Application.BinaryPath))" -Force}
-    catch{Log-Message "ERRR" "Unable to copy from $($Application.StagedPath) to $($Application.InstallPath)\$($Application.Name)$([System.IO.Path]::GetExtension($Application.BinaryPath))" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose; return $false}
-
-    if (-not (Set-EnvironmentVariable -Name "NUGET_HOME" -Value $Application.InstallPath)) {Log-Message "ERRR" "Failed to set NUGET_HOME" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose; return $false}
-    if (-not (Add-ToPath -Value $Application.InstallPath)) {Log-Message "ERRR" "Failed to add to PATH" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose; return $false}
-    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine")
-
+    $systemOps.SetEnvironmentVariable("NUGET_HOME",$Application.InstallPath)
+    $systemOps.AddToPath($Application.InstallPath)
     return $true
 }
 
 function Invoke-PostDownload_MSI_CommandCenter {[CmdletBinding()]param([Parameter()][object]$Application)
     Remove-Item -Path $Application.StagedPath -Force
-    Log-Message "INFO" "Extracting ZIP file for $($Application.Name) v$($Application.Version) to $StagingDirectory..." -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
-    Log-Message "DBUG" "Executing Expand-Archive -Path $($Application.BinaryPath) -DestinationPath $StagingDirectory -Force" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
-    try{
-        $FolderName = Expand-Archive -Path $Application.BinaryPath -DestinationPath $StagingDirectory -Verbose -Force *>&1  | Foreach-Object {
-            if($_.message -match "Created '(.*\.exe)'.*"){Get-Item $Matches[1]}
-        }
-        Log-Message "SCSS" "$($Application.Name) v$($Application.Version) extracted successfully" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
+    $logger.Log("INFO", "Extracting ZIP file for $($Application.Name) v$($Application.Version) to $StagingDirectory...")
+    $logger.Log("DBUG", "Executing Expand-Archive -Path $($Application.BinaryPath) -DestinationPath $StagingDirectory -Force")
+    $FolderName = Expand-Archive -Path $Application.BinaryPath -DestinationPath $StagingDirectory -Verbose -Force *>&1  | Foreach-Object {
+        if($_.message -match "Created '(.*\.exe)'.*"){Get-Item $Matches[1]}
     }
-    catch{Log-Message "ERRR" "Extraction of $($Application.BinaryPath) to $StagingDirectory failed" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose; return $false}
+    $logger.Log("SCSS", "$($Application.Name) v$($Application.Version) extracted successfully")
     $Application.StagedPath = "$StagingDirectory\$($Application.Name)_$($Application.Version).exe"
+    $logger.Log("VRBS", "Executing Move-Item from $FolderName to $Application.StagedPath")
     Move-Item -Path $FolderName -Destination $Application.StagedPath -Force
     Remove-Item -Path $FolderName.Directory -Recurse -Force
     return $true
@@ -57,18 +53,17 @@ function Invoke-PostDownload_MSI_CommandCenter {[CmdletBinding()]param([Paramete
 
 function Invoke-PostDownload_MSI_LiveUpdate {[CmdletBinding()]param([Parameter()][object]$Application)
     Remove-Item -Path $Application.StagedPath -Force
-    Log-Message "INFO" "Extracting ZIP file for $($Application.Name) v$($Application.Version) to $StagingDirectory..." -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
-    Log-Message "DBUG" "Executing Expand-Archive -Path $($Application.BinaryPath) -DestinationPath $StagingDirectory -Force" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
-    try{
-        $FolderName = Expand-Archive -Path $Application.BinaryPath -DestinationPath $StagingDirectory -Verbose -Force *>&1  | Foreach-Object {
-            if($_.message -match "Created '(.*\.exe)'.*"){Get-Item $Matches[1]}
-        }
-        Log-Message "SCSS" "$($Application.Name) v$($Application.Version) extracted successfully" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
+    $logger.Log("INFO", "Extracting ZIP file for $($Application.Name) v$($Application.Version) to $StagingDirectory...")
+    $logger.Log("DBUG", "Executing Expand-Archive -Path $($Application.BinaryPath) -DestinationPath $StagingDirectory -Force")
+    $FolderName = Expand-Archive -Path $Application.BinaryPath -DestinationPath $StagingDirectory -Verbose -Force *>&1  | Foreach-Object {
+        if($_.message -match "Created '(.*\.exe)'.*"){Get-Item $Matches[1]}
     }
-    catch{Log-Message "ERRR" "Extraction of $($Application.BinaryPath) to $StagingDirectory failed" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose; return $false}
+    $logger.Log("SCSS", "$($Application.Name) v$($Application.Version) extracted successfully")
     $Application.StagedPath = "$StagingDirectory\$($Application.Name)_$($Application.Version).exe"
+    $logger.Log("VRBS", "Executing Move-Item from $FolderName to $Application.StagedPath")
     Move-Item -Path $FolderName -Destination $Application.StagedPath -Force
     Remove-Item -Path $FolderName.Directory -Recurse -Force
+    $logger.Log("INFO", "Post-Download completed for $($Application.Name)")
     return $true
 }
 
@@ -109,7 +104,7 @@ function Invoke-PreInstall {[CmdletBinding()]param([Parameter()][object]$Applica
 
 function Invoke-PreInstall_Adobe_Acrobat {[CmdletBinding()]param([Parameter()][object]$Application)
     $Application.InstallPath = $Application.InstallPath.Replace("\Acrobat","")
-    Add-Folders $Application.InstallPath
+    $systemOps.AddFolders($Application.InstallPath)
     $Application.InstallerArguments = $($Application.InstallerArguments).ForEach{$_.Replace("\Acrobat","")}
     return $true
 }
@@ -122,25 +117,12 @@ function Invoke-PostInstall {[CmdletBinding()]param([Parameter()][object]$Applic
 
 function Invoke-PostInstall_Python {[CmdletBinding()]param([Parameter()][object]$Application)
     $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User") 
-
-    Log-Message "VRBS" "Upgrading pip..." -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
-    $Command = "python -m pip install --upgrade pip"
-    Log-Message "DBUG" "Executing command: $Command" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
-    try {python -m pip install --upgrade pip;Log-Message "VRBS" "pip upgraded..." -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose}
-    catch {Log-Message "ERRR" "Failed to upgrade pip" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose; return $false}
+    $logger.Log("VRBS", "Upgrading pip...")
+    $systemOps.StartProcess("python",@("-m","pip","install","--upgrade","pip"))
+    $logger.Log("VRBS", "pip upgraded...")
     return $true
 }
 
-function Invoke-PostInstall_Seagate_DiskWizard {[CmdletBinding()]param([Parameter()][object]$Application)
-    $ApplicationPath = (Get-ChildItem -Path $Application.InstallPath).FullName
-    Log-Message "INFO" "Running installer for $($Application.Name) v$($Application.Version)..." -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
-    try{
-        Invoke-Process -Path $ApplicationPath -Arguments $Application.InstallerArguments
-        Log-Message "SCSS" "$($Application.Name) v$version installed successfully" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
-    }
-    catch{Log-Message "ERRR" "Installation of $($Application.Name) v$($Application.Version) unsuccessful" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose; return $false}
-    return $true
-}
 
 function Invoke-PostInstall_Microsoft_VSCode {[CmdletBinding()]param([Parameter()][object]$Application)
     code --install-extension ms-vscode.powershell
