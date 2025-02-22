@@ -40,12 +40,7 @@ class ApplicationManager {
     hidden [object]$Logger
     hidden [object]$ConfigManager
     
-    ApplicationManager(
-        [object]$sysOps,
-        [object]$stateManager,
-        [object]$logger,
-        [object]$configManager
-    ) {
+    ApplicationManager([object]$sysOps,[object]$stateManager,[object]$logger,[object]$configManager) {
         $this.SystemOps = $sysOps
         $this.StateManager = $stateManager
         $this.Logger = $logger
@@ -54,39 +49,29 @@ class ApplicationManager {
 
     [ApplicationConfig]InitializeApplication([ApplicationConfig]$app) {
         $this.Logger.Log("INFO", "Initializing application paths for $($app.Name)")
-        
         try {
             $InstallDirectory = $this.ConfigManager.ResolvePath('install')
             $BinariesDirectory = $this.ConfigManager.ResolvePath('binaries')
             $StagingDirectory = $this.ConfigManager.ResolvePath('staging')
             $PostInstallDirectory = $this.ConfigManager.ResolvePath('postInstall')
 
-            # Determine extension
-            $ext = if($app.InstallationType -eq "Winget") {
-                ".exe"
-            } else {
+            $ext = if($app.InstallationType -eq "Winget"){".exe"}
+            else {
                 if($app.DownloadURL) {
                     $urlExt = [System.IO.Path]::GetExtension($app.DownloadURL)
                     if ([string]::IsNullOrEmpty($urlExt) -or $urlExt.Length -gt 5) {
                         $this.Logger.Log("VRBS", "Invalid or missing extension from URL, defaulting to .exe")
                         ".exe"
-                    } else {
-                        $urlExt
-                    }
-                } else {
-                    $this.Logger.Log("VRBS", "No download URL specified, defaulting to .exe")
-                    ".exe"
-                }
+                    } else {$urlExt}
+                } else {$this.Logger.Log("VRBS", "No download URL specified, defaulting to .exe");".exe"}
             }
 
-            # Set paths
             $appBaseName = "$($app.Name)_$($app.Version)"
             if (-not $app.InstallPath) {
                 $pathParts = $app.Name.Split('_')
                 $app.InstallPath = Join-Path $InstallDirectory ($pathParts -join '\')
                 $this.Logger.Log("VRBS", "Set install path to: $($app.InstallPath)")
             }
-
             $app.BinaryPath = Join-Path $BinariesDirectory "$appBaseName$ext"
             $this.Logger.Log("VRBS", "Set binary path to: $($app.BinaryPath)")
             $app.StagedPath = Join-Path $StagingDirectory "$appBaseName$ext"
@@ -94,30 +79,15 @@ class ApplicationManager {
             $app.PostInstallPath = Join-Path $PostInstallDirectory "$appBaseName$ext"
             $this.Logger.Log("VRBS", "Set post-install path to: $($app.PostInstallPath)")
 
-            # Process installation arguments
             $app = $this.ProcessInstallationArguments($app)
-
-            # Ensure directories exist
-            @($InstallDirectory, $BinariesDirectory, $StagingDirectory, $PostInstallDirectory) | ForEach-Object {
-                if (-not (Test-Path $_)) {
-                    New-Item -ItemType Directory -Path $_ -Force | Out-Null
-                    $this.Logger.Log("VRBS", "Created directory: $_")
-                }
-            }
-            
             $this.Logger.Log("INFO", "Application paths initialized successfully")
         }
-        catch {
-            $this.Logger.Log("ERRR", "Failed to initialize application paths: $_")
-            throw
-        }
+        catch {$this.Logger.Log("ERRR", "Failed to initialize application paths: $_");throw}
         return $app
     }
 
     hidden [object]ProcessInstallationArguments([object]$app) {
         $this.Logger.Log("VRBS", "Processing installation arguments for $($app.Name)")
-        
-        # Setup variables for substitution
         $variables = @{
             '$Name' = $app.Name
             '$Version' = $app.Version
@@ -127,7 +97,6 @@ class ApplicationManager {
             '$StagingDirectory' = $this.ConfigManager.ResolvePath('staging')
         }
 
-        # Process installer arguments
         if ($app.InstallerArguments) {
             $this.Logger.Log("VRBS", "Processing installer arguments")
             $processedArgs = $app.InstallerArguments | ForEach-Object {
@@ -164,10 +133,8 @@ class ApplicationManager {
     }
 
     [bool]Download([ApplicationConfig]$app) {
-        # Check if download is needed
-        if(-not $app.Download) { return $true }
-        
-        # Check cache first
+        if(-not $app.Download){return $true}
+        if(-not $this.InvokeStep($app,"PreDownload")){return $false}
         $cacheKey = "$($app.Name)_$($app.Version)"
         $cachePath = Join-Path $this.ConfigManager.ResolvePath('binaries') "$cacheKey.cache"
         if (Test-Path $cachePath) {
@@ -178,78 +145,57 @@ class ApplicationManager {
             }
         }
         
-        # Handle download based on installation type
         try {
             $success = switch ($app.InstallationType) {
-                "Winget" { $this.DownloadWingetPackage($app) }
-                "PSModule" { return $true } # No download needed for PS modules
-                default { $this.DownloadDirectPackage($app) }
+                "Winget"    {$this.DownloadWingetPackage($app)}
+                "PSModule"  {return $true} # No download needed for PS modules
+                default     {$this.DownloadDirectPackage($app)}
             }
             if ($success) {
-                # Cache the download info if successful
                 $hash = (Get-FileHash -Path $app.BinaryPath).Hash
                 @{Hash=$hash;DateTime=Get-Date -Format "o"} | ConvertTo-Json | Set-Content $cachePath
+                if(-not $this.InvokeStep($app,"PostDownload")){return $false}
             }
             return $success
         }
-        catch {
-            $this.Logger.Log("ERRR", "Unexpected error during download: $_")
-            return $false
-        }
+        catch {$this.Logger.Log("ERRR", "Unexpected error during download: $_");return $false}
     }
     
     [bool]Install([ApplicationConfig]$app) {
-        # Check if install is needed
-        if(-not $app.Install) { return $true }
-        
-        # Proceed with installation
-        if (-not $this.InvokePreStep($app, "PreInstall")) { return $false }
-        
-        # Create symlinks if specified
-        if($app.SymLinkPath) {$this.SystemOps.AddSymLink($app.SymLinkPath, $app.InstallPath)}
-        
-        # Handle different installation types
+        if(-not $app.Install){return $true}
+        if(-not $this.InvokeStep($app,"PreInstall")){return $false}
+        if($app.SymLinkPath){$this.SystemOps.AddSymLink($app.SymLinkPath,$app.InstallPath)}
+
         $success = switch ($app.InstallationType) {
-            "Winget" { $this.InstallWingetPackage($app) }
-            "PSModule" { $this.InstallPSModule($app) }
-            default { $this.InstallDirectPackage($app) }
+            "Winget"    {$this.InstallWingetPackage($app)}
+            "PSModule"  {$this.InstallPSModule($app)}
+            default     {$this.InstallDirectPackage($app)}
         }
         
         if($success) {
             if($app.ProcessIDs) {foreach($procId in $app.ProcessIDs) {$this.SystemOps.KillProcess($procId)}}
-            $this.InvokePostStep($app, "PostInstall")
-            # Move staged files to post-install location
+            $this.InvokeStep($app, "PostInstall")
             if(Test-Path $app.StagedPath) {$this.SystemOps.MoveFolder($app.StagedPath, $app.PostInstallPath)}
         }
         return $success
     }
     
     [bool]Uninstall([ApplicationConfig]$app) {
-        if (-not $this.InvokePreStep($app, "PreUninstall")) { return $false }
-        $success = switch ($app.InstallationType) {
-            "Winget" { $this.UninstallWingetPackage($app) }
-            "PSModule" { $this.UninstallPSModule($app) }
-            default { $this.UninstallDirectPackage($app) }
+        if(-not $this.InvokeStep($app,"PreUninstall")){return $false}
+        $success=switch($app.InstallationType){
+            "Winget"    {$this.UninstallWingetPackage($app)}
+            "PSModule"  {$this.UninstallPSModule($app)}
+            default     {$this.UninstallDirectPackage($app)}
         }
         if($success) {
-            $this.InvokePostStep($app, "PostUninstall")
-            # Cleanup installation directory
+            $this.InvokeStep($app, "PostUninstall")
             if($app.InstallPath -and (Test-Path $app.InstallPath)) {Remove-Item -Path $app.InstallPath -Recurse -Force}
         }
         return $success
     }
     
     # Private helper methods
-    hidden [bool]InvokePreStep([ApplicationConfig]$app, [string]$stepName) {
-        $functionName = "Invoke-${stepName}_$($app.Name)"
-        if(Get-Command $functionName -ERRRAction SilentlyContinue) {
-            $this.Logger.Log("INFO", "Running $stepName for $($app.Name)")
-            return & $functionName -Application $app
-        }
-        return $true
-    }
-    
-    hidden [bool]InvokePostStep([ApplicationConfig]$app, [string]$stepName) {
+    hidden [bool]InvokeStep([ApplicationConfig]$app,[string]$stepName) {
         $functionName = "Invoke-${stepName}_$($app.Name)"
         if(Get-Command $functionName -ERRRAction SilentlyContinue) {
             $this.Logger.Log("INFO", "Running $stepName for $($app.Name)")
@@ -260,20 +206,16 @@ class ApplicationManager {
     
     # Implementation methods for different package types...
     hidden [bool]DownloadWingetPackage([ApplicationConfig]$app) {
-        $this.Logger.Log("DBUG", "Binary path: $($app.BinaryPath)")
         $TempBinaryPath = $($app.BinaryPath).Replace([System.IO.Path]::GetExtension($app.BinaryPath), "")
         $this.Logger.Log("INFO", "Downloading $($app.Name) from winget to $TempBinaryPath")
-        
         $this.SystemOps.AddFolders($TempBinaryPath)
-        $version = (Find-WinGetPackage -Id $app.ApplicationID -MatchOption Equals).Version
-        $DownloadArguments = @("--version", $version,"--download-directory", "`"$TempBinaryPath`"","--accept-source-agreements","--accept-package-agreements")
-        if ($app.MachineScope) {$DownloadArguments += @("--scope", "machine")}
-        
+        $version=(Find-WinGetPackage -Id $app.ApplicationID -MatchOption Equals).Version
+        $DownloadArguments=@("--version", $version,"--download-directory", "`"$TempBinaryPath`"","--accept-source-agreements","--accept-package-agreements")
+        if ($app.MachineScope){$DownloadArguments += @("--scope", "machine")}
         try {
             $Process = $this.SystemOps.StartProcess("winget", @("download", "--id", $app.ApplicationID) + $DownloadArguments)
             if ($Process.ExitCode -eq 0) {$this.Logger.Log("SCSS", "$($app.Name) v$version downloaded successfully")}
             else {$this.Logger.Log("ERRR", "Download failed with exit code $($Process.ExitCode)");return $false}
-            # Move downloaded files to binary directory
             Get-ChildItem -Path $TempBinaryPath | ForEach-Object {
                 $NewFileName = if($_.PSIsContainer) {"$($app.Name)_$($app.Version)_$($_.Name)"} else {"$($app.Name)_$($app.Version)$($_.Extension)"}
                 $destinationPath = Join-Path -Path $this.ConfigManager.ResolvePath('binaries') -ChildPath $NewFileName
@@ -319,11 +261,7 @@ class ApplicationManager {
     }
     
     hidden [bool]InstallDirectPackage([ApplicationConfig]$app) {
-        if (-not $app.StagedPath) {
-            $this.Logger.Log("ERRR", "No staged path specified")
-            return $false
-        }
-        
+        if(-not $app.StagedPath){$this.Logger.Log("ERRR","No staged path specified");return $false}
         $FileType = [System.IO.Path]::GetExtension($app.StagedPath)
         return switch ($FileType) {
             ".zip"
