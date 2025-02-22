@@ -577,15 +577,9 @@ function Invoke-MainAction {[CmdletBinding()]param([Parameter()][object]$Softwar
                     if (ShouldProcessApp $app) {
                         try {
                             $appManager.InitializeApplication($app)
-                            $downloadJobs += Start-Job -ScriptBlock {
-                                param($app)
-                                $appManager.Download($app)
-                            } -ArgumentList $app
+                            $downloadJobs += Start-Job -ScriptBlock {param($app);$appManager.Download($app)} -ArgumentList $app
                         }
-                        catch {
-                            $logger.Log("ERRR", "Failed to initialize $($app.Name): $_")
-                            continue
-                        }
+                        catch {$logger.Log("ERRR", "Failed to initialize $($app.Name): $_");continue}
                     }
                 }
                 Wait-Job $downloadJobs | Receive-Job
@@ -593,64 +587,39 @@ function Invoke-MainAction {[CmdletBinding()]param([Parameter()][object]$Softwar
             
             foreach ($app in $SoftwareList) {
                 if (-not (ShouldProcessApp $app)) { continue }
-                
                 $logger.Log("PROG", "Processing installation for $($app.Name)")
                 $timer = [System.Diagnostics.Stopwatch]::StartNew()
-                
                 try {
                     $app = $appManager.InitializeApplication($app)
-                    
-                    if (-not $ParallelDownloads) {
-                        if (-not $appManager.Download($app)) { 
-                            $logger.Log("ERRR", "Download failed for $($app.Name)")
-                            continue 
-                        }
-                    }
-                    
-                    if (-not $appManager.Install($app)) {
-                        $logger.Log("ERRR", "Installation failed for $($app.Name)")
-                        continue
-                    }
-                    
+                    if(-not $ParallelDownloads){if(-not $appManager.Download($app)){$logger.Log("ERRR", "Download failed for $($app.Name)");continue}}
+                    if(-not $appManager.Install($app)){$logger.Log("ERRR", "Installation failed for $($app.Name)");continue}
                     $timer.Stop()
                     $logger.Log("PROG", "Installation of $($app.Name) completed in $($timer.Elapsed)")
                 }
-                catch {
-                    $logger.Log("ERRR", "Failed to process $($app.Name): $_")
-                    continue
-                }
+                catch {$logger.Log("ERRR", "Failed to process $($app.Name): $_");continue}
             }
             
             Invoke-MainInstallPostStep
         }
         
         "Uninstall" {
-            if (-not (Invoke-MainUninstallPreStep)) { return $false }
-            
+            if(-not(Invoke-MainUninstallPreStep)){return $false}
             [Array]::Reverse($SoftwareList)
-            foreach ($app in $SoftwareList) {
+            foreach($app in $SoftwareList){
                 if (-not (ShouldProcessApp $app)) { continue }
-                
                 $logger.Log("PROG", "Processing uninstallation for $($app.Name)")
-                if (-not $appManager.Uninstall($app)) {
-                    $logger.Log("ERRR", "Uninstallation failed for $($app.Name)")
-                    continue
-                }
+                if (-not $appManager.Uninstall($app)) {$logger.Log("ERRR", "Uninstallation failed for $($app.Name)");continue}
             }
-            
             Invoke-MainUninstallPostStep
         }
         
         "Test" {
             if (-not (Invoke-MainTestPreStep)) { return $false }
-            
             foreach ($app in $SoftwareList) {
                 if (-not (ShouldProcessApp $app)) { continue }
-                
                 $logger.Log("INFO", "Testing $($app.Name)")
                 Invoke-Testing -Application $app
             }
-            
             Invoke-MainTestPostStep
         }
     }
@@ -659,13 +628,7 @@ function Invoke-MainAction {[CmdletBinding()]param([Parameter()][object]$Softwar
 # Helper function to determine if an app should be processed
 function ShouldProcessApp {
     param([Parameter()][object]$app)
-    
-    if ($TestingMode -and $app.TestingComplete) { return $false }
-    if ($ApplicationName -and ($app.Name -ne $ApplicationName -or 
-        ($ApplicationVersion -and $app.Version -ne $ApplicationVersion))) {
-        return $false
-    }
-    return $true
+    return (-not $TestingMode) -or (-not $app.TestingComplete)
 }
 
 if ($CleanupCache) {
@@ -691,13 +654,20 @@ try {
     })
     
     $SoftwareList = Invoke-MainPreStep
-    
+
+    if ($ApplicationName) {
+        $SoftwareList = $SoftwareList | Where-Object { 
+            $_.Name -eq $ApplicationName -and 
+            (-not $ApplicationVersion -or $_.Version -eq $ApplicationVersion)
+        }
+    }
+
     # Process software by installation type - Fix the loop structure
     foreach ($installType in @('Winget', 'PSModule', 'Other', 'Manual')) {
         $currentType = $installType
         $logger.Log("INFO", "Processing $currentType applications")
         
-        $typeList = $SoftwareList | Where-Object { $_.InstallationType -eq $currentType }
+        $typeList = $SoftwareList | Where-Object { $_.InstallationType -eq $currentType  -and (ShouldProcessApp $_)}
         
         if ($typeList) {
             $logger.Log("INFO", "Found $($typeList.Count) $currentType applications to process")
