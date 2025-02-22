@@ -23,7 +23,7 @@ param (
 
 $modulePath = Split-Path -Parent $PSScriptRoot
 $modulePath = Join-Path $modulePath "modules"
-Write-Host "[$(Get-Date -f 'yyyyMMdd_HHmmss')] [VRBS] Module path resolved to: $modulePath" -ForegroundColor "Cyan"
+Write-Verbose "[$(Get-Date -f 'yyyyMMdd_HHmmss')] [VRBS] Module path resolved to: $modulePath" -ForegroundColor "Cyan"
 $moduleOrder = @(
     @{Name="ConfigManager"; Path=Join-Path $modulePath "ConfigManager.psm1"},
     @{Name="SystemOperations"; Path=Join-Path $modulePath "SystemOperations.psm1"},
@@ -32,37 +32,38 @@ $moduleOrder = @(
     @{Name="ApplicationManager"; Path=Join-Path $modulePath "ApplicationManager.psm1"}
 )
 foreach ($module in $moduleOrder) {
-    Write-Host "[$(Get-Date -f 'yyyyMMdd_HHmmss')] [INFO] Loading module: $($module.Name) from $($module.Path)"
+    Write-Verbose "[$(Get-Date -f 'yyyyMMdd_HHmmss')] [VRBS] Loading module: $($module.Name) from $($module.Path)"
     if (Test-Path $module.Path) {Import-Module $module.Path -Force 4> $null}
     else {Write-Host "[$(Get-Date -f 'yyyyMMddHHmmss')] [ERRR] Module file not found: $($module.Path)" -ForegroundColor "Red";throw}
 }
 try {
     $logger = New-LogManager
-    $logger.Log("INFO", "Basic logger created")
+    $logger.Log("VRBS", "Basic logger created")
     
     $configManager = New-ConfigManager -ConfigPath $ConfigPath -Logger $logger
-    $logger.Log("INFO", "ConfigManager initialized successfully")
+    $logger.Log("VRBS", "ConfigManager initialized successfully")
     
     $logger.Initialize(
         (Join-Path $configManager.ResolvePath('logs') "application.log"),
         (Join-Path $configManager.ResolvePath('logs') "telemetry.log")
     )
-    $logger.Log("INFO", "Logger fully initialized with proper paths")
+    $logger.Log("VRBS", "Logger fully initialized with proper paths")
     
     $stateManager = New-StateManager -StateFile $configManager.GetStatePath() -Logger $logger
-    $logger.Log("INFO", "StateManager initialized successfully")
+    $logger.Log("VRBS", "StateManager initialized successfully")
     
     $systemOps = New-SystemOperations -BinDir $configManager.ResolvePath("binaries") `
                                     -StagingDir $configManager.ResolvePath("staging") `
                                     -InstallDir $configManager.ResolvePath("install") `
-                                    -Logger $logger
-    $logger.Log("INFO", "SystemOperations initialized successfully")
+                                    -Logger $logger `
+                                    -Config $configManager.Config
+    $logger.Log("VRBS", "SystemOperations initialized successfully")
     
     $appManager = New-ApplicationManager -SystemOps $systemOps `
                                        -StateManager $stateManager `
                                        -Logger $logger `
                                        -ConfigManager $configManager
-    $logger.Log("INFO", "ApplicationManager initialized successfully")
+    $logger.Log("VRBS", "ApplicationManager initialized successfully")
 }
 catch {if($logger){$logger.Log("ERRR", "Failed to initialize managers: $_")}else{Write-Error "Failed to initialize managers: $_"};throw}
 try {
@@ -121,9 +122,6 @@ function Invoke-MainUninstallPreStep {[CmdletBinding()]param()
 
 function Invoke-MainTestPreStep {[CmdletBinding()]param()
     $logger.Log("INFO","Starting main install pre-step...")
-    foreach ($dir in @($BinariesDirectory, $StagingDirectory, $PostInstallDirectory)) {
-        if (-not (Add-Folders -DirPath $dir)) {$logger.Log("ERRR","Failed to add directory $dir");return $false}
-    }
     $logger.Log("INFO","Main install pre-step complete")
     return $true
 }
@@ -150,66 +148,6 @@ function Invoke-MainTestPostStep {[CmdletBinding()]param()
     $logger.Log("INFO","Starting main uninstall post-step...")
     $logger.Log("INFO","Main uninstall post-step complete")
     return $true
-}
-
-function Invoke-WithRetry {[CmdletBinding()]param([Parameter(Mandatory)][scriptblock]$ScriptBlock,[string]$Activity,[int]$MaxAttempts = $MaxRetries,[int]$DelaySeconds = $RetryDelay)
-    $attempt = 1
-    $success = $false
-    while(-not $success -and $attempt -le $MaxAttempts){
-        try {
-            if($attempt -gt 1){$logger.Log("WARN","Retrying $Activity (Attempt $attempt of $MaxAttempts)...")}
-            $result = & $ScriptBlock
-            $success = $true
-            return $result
-        } catch {
-            if($attempt -eq $MaxAttempts){$logger.Log("ERRR","Failed to $Activity after $MaxAttempts attempts: $_");throw}
-            $logger.Log("WARN","Attempt $attempt failed: $_")
-            Start-Sleep -Seconds $DelaySeconds
-            $attempt++ 
-        }
-    }
-}
-
-function Start-ParallelDownloads {[CmdletBinding()]param([Parameter()][object[]]$Applications)
-    $jobs = @()
-    $runspacePool = [runspacefactory]::CreateRunspacePool(1, $MaxConcurrentJobs)
-    $runspacePool.Open()
-    
-    foreach ($app in $Applications) {
-        if (-not (Test-ApplicationDependencies -Application $app)) {
-            $logger.Log("ERRR","Skipping $($app.Name) due to missing dependencies")
-            continue
-        }
-        
-        $powerShell = [powershell]::Create().AddScript({param($Application)
-            Invoke-DownloadSoftware -Application $Application
-        }).AddArgument($app)
-        
-        $powerShell.RunspacePool = $runspacePool
-        
-        $jobs += @{PowerShell = $powerShell;Handle = $powerShell.BeginInvoke();App = $app;StartTime = Get-Date}
-    }
-    
-    # Wait for jobs with timeout
-    while ($jobs.Where({ -not $_.Handle.IsCompleted })) {
-        foreach ($job in $jobs.Where({ -not $_.Handle.IsCompleted })) {
-            if ((Get-Date) - $job.StartTime -gt [TimeSpan]::FromSeconds($JobTimeout)) {
-                $logger.Log("ERRR","Download timeout for $($job.App.Name)")
-                $job.PowerShell.Stop()
-                $job.Handle.IsCompleted = $true
-            }
-        }
-        Start-Sleep -Seconds 1
-    }
-    
-    foreach ($job in $jobs) {
-        try {$job.PowerShell.EndInvoke($job.Handle)}
-        catch {$logger.Log("ERRR","Error in parallel download of $($job.App.Name): $_")}
-        finally {$job.PowerShell.Dispose()}
-    }
-    
-    $runspacePool.Close()
-    $runspacePool.Dispose()
 }
 
 function Remove-OldCache {
@@ -395,21 +333,24 @@ function Invoke-Testing {[CmdletBinding()]param([Parameter()][object]$Applicatio
 }
 #endregion
 #region DOWNLOAD
-function Invoke-DownloadSoftware {[CmdletBinding()]param([Parameter()][object]$Application)
+function Invoke-DownloadSoftware {
+    [CmdletBinding()]
+    param([Parameter()][object]$Application)
+    
     if(-not $Application.Download) { return $true }
-    # Implement file caching
+    
     $cacheKey = "$($Application.Name)_$($Application.Version)"
     $cachePath = Join-Path $BinariesDirectory "$cacheKey.cache"
     
     if (Test-Path $cachePath) {
         $cached = Get-Content $cachePath | ConvertFrom-Json
         if ($cached.Hash -and (Test-FileHash -FilePath $Application.BinaryPath -ExpectedHash $cached.Hash)) {
-            $logger.Log("INFO","Using cached version of $($Application.Name) v$($Application.Version)")
+            $logger.Log("INFO", "Using cached version of $($Application.Name) v$($Application.Version)")
             return $true
         }
     }
     
-    Invoke-WithRetry -Activity "download $($Application.Name)" -ScriptBlock {
+    $downloadScript = {
         if ($Application.InstallationType -eq "Winget") {
             $TempBinaryPath = $($Application.BinaryPath).Replace([System.IO.Path]::GetExtension($Application.BinaryPath), "")
             $logger.Log("INFO","Downloading $($Application.Name) version $($Application.Version) from winget to $TempBinaryPath...")
@@ -464,9 +405,11 @@ function Invoke-DownloadSoftware {[CmdletBinding()]param([Parameter()][object]$A
         Invoke-ScriptStep -StepName "PostDownload" -Application $Application
     }
     
+    $systemOps.InvokeWithRetry($downloadScript, "download $($Application.Name)")
+    
     # Cache the download info
-    $hash=(Get-FileHash -Path $Application.BinaryPath).Hash
-    @{Hash=$hash;DateTime=Get-Date -Format "o"} | ConvertTo-Json | Set-Content $cachePath
+    $hash = (Get-FileHash -Path $Application.BinaryPath).Hash
+    @{Hash=$hash; DateTime=Get-Date -Format "o"} | ConvertTo-Json | Set-Content $cachePath
     
     return $true
 }
@@ -553,37 +496,38 @@ function Invoke-InstallSoftware {[CmdletBinding()]param([Parameter()][object]$Ap
 }
 #endregion
 #region MAIN
-function Invoke-MainAction {[CmdletBinding()]param([Parameter()][object]$SoftwareList)
+function Invoke-MainAction {
+    [CmdletBinding()]
+    param([Parameter()][object]$SoftwareList)
+    
     switch ($Action) {
         "Install" {
             if (-not (Invoke-MainInstallPreStep)) { return $false }
             
-            if ($ParallelDownloads) {
-                $downloadJobs = @()
-                foreach ($app in $SoftwareList) {
-                    if (ShouldProcessApp $app) {
-                        try {
-                            $appManager.InitializeApplication($app)
-                            $downloadJobs += Start-Job -ScriptBlock {param($app);$appManager.Download($app)} -ArgumentList $app
-                        }
-                        catch {$logger.Log("ERRR", "Failed to initialize $($app.Name): $_");continue}
-                    }
-                }
-                Wait-Job $downloadJobs | Receive-Job
-            }
-            
             foreach ($app in $SoftwareList) {
                 if (-not (ShouldProcessApp $app)) { continue }
+                
                 $logger.Log("PROG", "Processing installation for $($app.Name)")
                 $timer = [System.Diagnostics.Stopwatch]::StartNew()
+                
                 try {
                     $app = $appManager.InitializeApplication($app)
-                    if(-not $ParallelDownloads){if(-not $appManager.Download($app)){$logger.Log("ERRR", "Download failed for $($app.Name)");continue}}
-                    if(-not $appManager.Install($app)){$logger.Log("ERRR", "Installation failed for $($app.Name)");continue}
+                    if (-not $appManager.DownloadAll($SoftwareList, $ParallelDownloads)) {
+                        $logger.Log("ERRR", "Download failed for $($app.Name)")
+                        continue
+                    }
+                    if (-not $appManager.Install($app)) {
+                        $logger.Log("ERRR", "Installation failed for $($app.Name)")
+                        continue
+                    }
+                    
                     $timer.Stop()
                     $logger.Log("PROG", "Installation of $($app.Name) completed in $($timer.Elapsed)")
                 }
-                catch {$logger.Log("ERRR", "Failed to process $($app.Name): $_");continue}
+                catch {
+                    $logger.Log("ERRR", "Failed to process $($app.Name): $_")
+                    continue
+                }
             }
             
             Invoke-MainInstallPostStep

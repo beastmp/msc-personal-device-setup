@@ -12,15 +12,31 @@ class SystemOperations {
     
     # Process management properties
     [int]$DefaultTimeout = 1800 # 30 minutes
-    [int]$RetryCount = 3
-    [int]$RetryDelay = 10
+    [int]$RetryCount
+    [int]$RetryDelay
+
+    [int]$MaxConcurrentJobs
+    [int]$JobTimeout
+
+    [bool]$RetryEnabled
+    [bool]$ParallelEnabled
     
-    # Update constructor to accept Logger
-    SystemOperations([string]$binDir, [string]$stagingDir, [string]$installDir, [object]$logger) {
+    # Update constructor to accept Logger and Config
+    SystemOperations([string]$binDir, [string]$stagingDir, [string]$installDir, [object]$logger, [object]$config) {
         $this.BinariesDirectory = $binDir
         $this.StagingDirectory = $stagingDir
         $this.InstallDirectory = $installDir
         $this.Logger = $logger
+        
+        # Add feature flags
+        $this.RetryEnabled = $config.execution.retry.enabled
+        $this.ParallelEnabled = $config.execution.parallelProcessing.enabled
+        
+        # Initialize from config
+        $this.MaxConcurrentJobs = $config.execution.parallelProcessing.maxConcurrentJobs
+        $this.JobTimeout = $config.execution.parallelProcessing.jobTimeoutSeconds
+        $this.RetryCount = $config.execution.retry.maxAttempts
+        $this.RetryDelay = $config.execution.retry.delaySeconds
     }
     
     # File Operations
@@ -104,23 +120,90 @@ class SystemOperations {
     }
 
     # Process Management
+    [object]InvokeWithRetry([scriptblock]$ScriptBlock) {
+        if (-not $this.RetryEnabled) { return & $ScriptBlock }
+        return $this.InvokeWithRetry($ScriptBlock, "operation", $this.RetryCount, $this.RetryDelay)
+    }
+    
     [object]InvokeWithRetry([scriptblock]$ScriptBlock, [string]$Activity) {
+        return $this.InvokeWithRetry($ScriptBlock, $Activity, $this.RetryCount, $this.RetryDelay)
+    }
+    
+    [object]InvokeWithRetry([scriptblock]$ScriptBlock, [string]$Activity, [int]$MaxAttempts, [int]$DelaySeconds) {
         $attempt = 1
-        while ($attempt -le $this.RetryCount) {
+        while ($attempt -le $MaxAttempts) {
             try {
-                if($attempt -gt 1){$this.Logger.Log("WARN", "Retrying $Activity (Attempt $attempt of $($this.RetryCount))...")}
+                if ($attempt -gt 1) {
+                    $this.Logger.Log("WARN", "Retrying $Activity (Attempt $attempt of $MaxAttempts)...")
+                    Start-Sleep -Seconds $DelaySeconds
+                }
                 return & $ScriptBlock
             }
             catch {
-                if ($attempt -eq $this.RetryCount) {
-                    $this.Logger.Log("ERRR", "Failed to $Activity after $($this.RetryCount) attempts: $_")
-                    throw "Failed to $Activity after $($this.RetryCount) attempts: $_"
+                if ($attempt -eq $MaxAttempts) {
+                    $this.Logger.Log("ERRR", "Failed to $Activity after $MaxAttempts attempts: $_")
+                    throw
                 }
-                Start-Sleep -Seconds $this.RetryDelay
-                $attempt++ 
+                $this.Logger.Log("WARN", "Attempt $attempt failed: $_")
+                $attempt++
             }
         }
         return $null
+    }
+
+    [array]InvokeParallel([scriptblock]$ScriptBlock, [array]$Items) {
+        if (-not $this.ParallelEnabled) {
+            $results = @()
+            foreach ($item in $Items) {
+                $results += & $ScriptBlock $item
+            }
+            return $results
+        }
+
+        $jobs = @()
+        $results = @()
+        $runspacePool = [runspacefactory]::CreateRunspacePool(1, $this.MaxConcurrentJobs)
+        $runspacePool.Open()
+        
+        foreach ($item in $Items) {
+            $powerShell = [powershell]::Create().AddScript($ScriptBlock).AddArgument($item)
+            $powerShell.RunspacePool = $runspacePool
+            
+            $jobs += @{
+                PowerShell = $powerShell
+                Handle = $powerShell.BeginInvoke()
+                Item = $item
+                StartTime = Get-Date
+            }
+        }
+        
+        while ($jobs.Where({ -not $_.Handle.IsCompleted })) {
+            foreach ($job in $jobs.Where({ -not $_.Handle.IsCompleted })) {
+                if ((Get-Date) - $job.StartTime -gt [TimeSpan]::FromSeconds($this.JobTimeout)) {
+                    $this.Logger.Log("ERRR", "Operation timeout for item: $($job.Item)")
+                    $job.PowerShell.Stop()
+                    $job.Handle.IsCompleted = $true
+                }
+            }
+            Start-Sleep -Seconds 1
+        }
+        
+        foreach ($job in $jobs) {
+            try {
+                $results += $job.PowerShell.EndInvoke($job.Handle)
+            }
+            catch {
+                $this.Logger.Log("ERRR", "Error in parallel operation: $_")
+            }
+            finally {
+                $job.PowerShell.Dispose()
+            }
+        }
+        
+        $runspacePool.Close()
+        $runspacePool.Dispose()
+        
+        return $results
     }
 
     [object]StartProcess([string]$Command,[string[]]$Arguments){return $this.StartProcess($Command, $Arguments, 0)}
@@ -203,9 +286,11 @@ function New-SystemOperations {
         [Parameter(Mandatory=$true)][string]$BinDir,
         [Parameter(Mandatory=$true)][string]$StagingDir,
         [Parameter(Mandatory=$true)][string]$InstallDir,
-        [Parameter(Mandatory=$true)][object]$Logger
+        [Parameter(Mandatory=$true)][object]$Logger,
+        [Parameter(Mandatory=$true)][object]$Config
     )
-    return [SystemOperations]::new($BinDir, $StagingDir, $InstallDir, $Logger)
+    
+    return [SystemOperations]::new($BinDir, $StagingDir, $InstallDir, $Logger, $Config)
 }
 
 Export-ModuleMember -Function New-SystemOperations

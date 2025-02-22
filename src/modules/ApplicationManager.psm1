@@ -134,64 +134,99 @@ class ApplicationManager {
 
     [bool]Download([ApplicationConfig]$app) {
         if(-not $app.Download){return $true}
-        if(-not $this.InvokeStep($app,"PreDownload")){return $false}
-        $cacheKey = "$($app.Name)_$($app.Version)"
-        $cachePath = Join-Path $this.ConfigManager.ResolvePath('binaries') "$cacheKey.cache"
-        if (Test-Path $cachePath) {
-            $cached = Get-Content $cachePath | ConvertFrom-Json
-            if ($cached.Hash -and ($this.SystemOps.ValidateFileHash($app.BinaryPath, $cached.Hash))) {
-                $this.Logger.Log("INFO", "Using cached version of $($app.Name)")
-                return $true
-            }
-        }
         
-        try {
+        return $this.SystemOps.InvokeWithRetry({
+            if(-not $this.InvokeStep($app,"PreDownload")){return $false}
+            
+            # Cache checking logic
+            $cacheKey = "$($app.Name)_$($app.Version)"
+            $cachePath = Join-Path $this.ConfigManager.ResolvePath('binaries') "$cacheKey.cache"
+            if (Test-Path $cachePath) {
+                $cached = Get-Content $cachePath | ConvertFrom-Json
+                if ($cached.Hash -and ($this.SystemOps.ValidateFileHash($app.BinaryPath, $cached.Hash))) {
+                    $this.Logger.Log("INFO", "Using cached version of $($app.Name)")
+                    return $true
+                }
+            }
+            
             $success = switch ($app.InstallationType) {
                 "Winget"    {$this.DownloadWingetPackage($app)}
-                "PSModule"  {return $true} # No download needed for PS modules
+                "PSModule"  {return $true}
                 default     {$this.DownloadDirectPackage($app)}
             }
+            
             if ($success) {
                 $hash = (Get-FileHash -Path $app.BinaryPath).Hash
                 @{Hash=$hash;DateTime=Get-Date -Format "o"} | ConvertTo-Json | Set-Content $cachePath
                 if(-not $this.InvokeStep($app,"PostDownload")){return $false}
             }
             return $success
-        }
-        catch {$this.Logger.Log("ERRR", "Unexpected error during download: $_");return $false}
+        }, "download $($app.Name)")
     }
     
+    [bool]DownloadAll([array]$applications, [bool]$requestParallel = $false) {
+        # Only use parallel if both requested and enabled in config
+        $useParallel = $requestParallel -and $this.SystemOps.ParallelEnabled
+        
+        if ($useParallel) {
+            $scriptBlock = {
+                param($app)
+                $this.Download($app)
+            }
+            
+            $results = $this.SystemOps.InvokeParallel($scriptBlock, $applications)
+            return -not ($results -contains $false)
+        }
+        else {
+            foreach ($app in $applications) {
+                if (-not $this.Download($app)) {
+                    return $false
+                }
+            }
+            return $true
+        }
+    }
+
     [bool]Install([ApplicationConfig]$app) {
         if(-not $app.Install){return $true}
-        if(-not $this.InvokeStep($app,"PreInstall")){return $false}
-        if($app.SymLinkPath){$this.SystemOps.AddSymLink($app.SymLinkPath,$app.InstallPath)}
-
-        $success = switch ($app.InstallationType) {
-            "Winget"    {$this.InstallWingetPackage($app)}
-            "PSModule"  {$this.InstallPSModule($app)}
-            default     {$this.InstallDirectPackage($app)}
-        }
         
-        if($success) {
-            if($app.ProcessIDs) {foreach($procId in $app.ProcessIDs) {$this.SystemOps.KillProcess($procId)}}
-            $this.InvokeStep($app, "PostInstall")
-            if(Test-Path $app.StagedPath) {$this.SystemOps.MoveFolder($app.StagedPath, $app.PostInstallPath)}
-        }
-        return $success
+        return $this.SystemOps.InvokeWithRetry({
+            if(-not $this.InvokeStep($app,"PreInstall")){return $false}
+            if($app.SymLinkPath){$this.SystemOps.AddSymLink($app.SymLinkPath,$app.InstallPath)}
+            
+            $success = switch ($app.InstallationType) {
+                "Winget"    {$this.InstallWingetPackage($app)}
+                "PSModule"  {$this.InstallPSModule($app)}
+                default     {$this.InstallDirectPackage($app)}
+            }
+            
+            if($success) {
+                if($app.ProcessIDs) {foreach($procId in $app.ProcessIDs) {$this.SystemOps.KillProcess($procId)}}
+                $this.InvokeStep($app, "PostInstall")
+                if(Test-Path $app.StagedPath) {$this.SystemOps.MoveFolder($app.StagedPath, $app.PostInstallPath)}
+            }
+            return $success
+        }, "install $($app.Name)")
     }
     
     [bool]Uninstall([ApplicationConfig]$app) {
-        if(-not $this.InvokeStep($app,"PreUninstall")){return $false}
-        $success=switch($app.InstallationType){
-            "Winget"    {$this.UninstallWingetPackage($app)}
-            "PSModule"  {$this.UninstallPSModule($app)}
-            default     {$this.UninstallDirectPackage($app)}
-        }
-        if($success) {
-            $this.InvokeStep($app, "PostUninstall")
-            if($app.InstallPath -and (Test-Path $app.InstallPath)) {Remove-Item -Path $app.InstallPath -Recurse -Force}
-        }
-        return $success
+        return $this.SystemOps.InvokeWithRetry({
+            if(-not $this.InvokeStep($app,"PreUninstall")){return $false}
+            
+            $success = switch($app.InstallationType) {
+                "Winget"    {$this.UninstallWingetPackage($app)}
+                "PSModule"  {$this.UninstallPSModule($app)}
+                default     {$this.UninstallDirectPackage($app)}
+            }
+            
+            if($success) {
+                $this.InvokeStep($app, "PostUninstall")
+                if($app.InstallPath -and (Test-Path $app.InstallPath)) {
+                    Remove-Item -Path $app.InstallPath -Recurse -Force
+                }
+            }
+            return $success
+        }, "uninstall $($app.Name)")
     }
     
     hidden [bool]InvokeStep([ApplicationConfig]$app,[string]$stepName) {
