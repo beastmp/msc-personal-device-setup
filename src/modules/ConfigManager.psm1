@@ -69,37 +69,22 @@ class ConfigManager {
     [object]GetSoftwareList([string]$dirPath, [string]$fileName) {
         $this.Logger.Log("INFO", "Getting software list from: $dirPath\$fileName")
         $softwareListPath = Join-Path $dirPath $fileName
-        
-        if (-not (Test-Path $softwareListPath)) {
-            $this.Logger.Log("ERRR", "Software list JSON file not found at $softwareListPath")
-            return $null
-        }
-        
+        if(-not(Test-Path $softwareListPath)){$this.Logger.Log("ERRR", "Software list JSON file not found at $softwareListPath");return $null}
         try {
             $softwareList = Get-Content -Raw -Path $softwareListPath | ConvertFrom-Json
             $this.Logger.Log("SCSS", "Software list successfully loaded")
             return $softwareList
         }
-        catch {
-            $this.Logger.Log("ERRR", "Unable to load software list")
-            return $null
-        }
+        catch {$this.Logger.Log("ERRR", "Unable to load software list");return $null}
     }
 
     [object]SaveSoftwareListApplication([string]$dirPath, [string]$fileName, [object]$application) {
         $this.Logger.Log("INFO", "Saving software list to: $dirPath\$fileName")
         $softwareListPath = Join-Path $dirPath $fileName
-        
-        if (-not (Test-Path $softwareListPath)) {
-            $this.Logger.Log("ERRR", "Software list JSON file not found at $softwareListPath")
-            return $null
-        }
-        
+        if (-not (Test-Path $softwareListPath)) {$this.Logger.Log("ERRR", "Software list JSON file not found at $softwareListPath");return $null}
         try {
             $softwareList = Get-Content -Raw -Path $softwareListPath | ConvertFrom-Json
-            $softwareList | Where-Object { 
-                $_.Name -eq $application.Name -and $_.Version -eq $application.Version 
-            } | ForEach-Object {
+            $softwareList | Where-Object {$_.Name -eq $application.Name -and $_.Version -eq $application.Version} | ForEach-Object {
                 $this.Logger.Log("DBUG", "Updating application: $($_.Name)")
                 $_.Download = $application.Download
                 $_.Install = $application.Install
@@ -116,11 +101,7 @@ class ConfigManager {
             $this.Logger.Log("INFO", "Software list successfully updated and saved")
             return $softwareList
         }
-        catch {
-            $this.Logger.Log("ERRR", "Unable to save software list: $_")
-            $this.Logger.Log("DBUG", "Error: $_")
-            return $null
-        }
+        catch {$this.Logger.Log("ERRR", "Unable to save software list: $_");return $null}
     }
 }
 

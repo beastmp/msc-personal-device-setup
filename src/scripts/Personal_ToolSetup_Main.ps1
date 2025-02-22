@@ -91,10 +91,6 @@ $script:SoftwareListFileName = $Config.files.softwareList
 # Add cleanup on script exit
 #trap {Write-Error $_;exit 1}
 
-#region HELPERS
-#region     LOG HELPERS
-#endregion
-
 function Invoke-MainPreStep {[CmdletBinding()]param()
     $logger.Log("INFO", "Starting main pre-step...")
     if (-not (Install-Winget)) {$logger.Log("ERRR", "Failed to install WinGet"); return $false}
@@ -104,35 +100,6 @@ function Invoke-MainPreStep {[CmdletBinding()]param()
     return $SoftwareList
 }
 
-function Save-SoftwareListApplication {[CmdletBinding()]param([Parameter()][string]$DirPath,[Parameter()][string]$FileName,[Parameter()][object]$Application)
-    $logger.Log("INFO","Saving software list to: $DirPath\$FileName")
-    $SoftwareListPath = "$DirPath\$FileName"
-    if (-Not (Test-Path $SoftwareListPath)) {$logger.Log("ERRR","Software list JSON file not found at $SoftwareListPath"); return $null}
-    try{
-        $SoftwareList = Get-Content -Raw -Path $SoftwareListPath | ConvertFrom-Json
-        $SoftwareList | Where-Object { $_.Name -eq $Application.Name -and $_.Version -eq $Application.Version } | ForEach-Object {
-            $logger.Log("DBUG","SoftwareList: $($_ | ConvertTo-Json -Depth 10)")
-            $logger.Log("DBUG","Application: $($Application | ConvertTo-Json -Depth 10)")
-            $_.Download = $Application.Download
-            $_.Install = $Application.Install
-            $_.MachineScope = $Application.MachineScope
-            $_.InstallationType = $Application.InstallationType
-            $_.ApplicationID = $Application.ApplicationID
-            $_.DownloadURL = $Application.DownloadURL
-            $_.ProcessID = $Application.ProcessID
-            $_.InstallerArguments = $Application.InstallerArguments
-            $_.UninstallerArguments = $Application.UninstallerArguments
-        }
-        $SoftwareList | ConvertTo-Json -Depth 10 | Set-Content -Path $SoftwareListPath
-        $logger.Log("INFO","Software list successfully updated and saved")
-        return $SoftwareList
-    }catch{
-        $logger.Log("ERRR","Unable to load software list")
-        $logger.Log("DBUG","Error: $_")
-        return $null
-    }
-}
-#endregion
 #region     APPLICATION HELPERS
 function Install-Winget {[CmdletBinding()]param()
     if(-not (Get-Command winget -ErrorAction SilentlyContinue)) {
@@ -148,14 +115,6 @@ function Install-Winget {[CmdletBinding()]param()
 }   
 #endregion
 #region     STEP HELPERS
-function Invoke-MainPreStep {[CmdletBinding()]param()
-    $logger.Log("INFO","Starting main pre-step...")
-    if (-not (Install-Winget)) {$logger.Log("ERRR","Failed to install WinGet"); return $false}
-    $SoftwareList = $configManager.GetSoftwareList($ScriptsDirectory, $SoftwareListFileName)
-    if (-Not $SoftwareList) {$logger.Log("ERRR","No software found for specified environment and server type."); return $false}
-    $logger.Log("INFO","Main pre-step complete")
-    return $SoftwareList
-}
 
 function Invoke-MainInstallPreStep {[CmdletBinding()]param()
     $logger.Log("INFO","Starting main install pre-step...")
@@ -203,19 +162,6 @@ function Invoke-MainTestPostStep {[CmdletBinding()]param()
     $logger.Log("INFO","Starting main uninstall post-step...")
     $logger.Log("INFO","Main uninstall post-step complete")
     return $true
-}
-
-# Pre/Post steps helper function
-function Invoke-ScriptStep {[CmdletBinding()]param([Parameter()][string]$StepName,[Parameter()][object]$Application)
-    $StepResult = $true
-    $Function = Get-Command -Name "Invoke-${StepName}_$($Application.Name)" -CommandType Function -ErrorAction SilentlyContinue
-    if($Function) {
-        $logger.Log("INFO","Starting $StepName for $($Application.Name) v$($Application.Version)...")
-        $StepResult = & $Function -Application $Application
-        if ($StepResult) {$logger.Log("SCSS","$StepName for $($Application.Name) v$($Application.Version) completed successfully")}
-        else {$logger.Log("ERRR","$StepName for $($Application.Name) v$($Application.Version) failed")}
-    }else{$logger.Log("VRBS","$StepName for $($Application.Name) v$($Application.Version) not defined")}
-    return $StepResult
 }
 
 function Invoke-WithRetry {[CmdletBinding()]param([Parameter(Mandatory)][scriptblock]$ScriptBlock,[string]$Activity,[int]$MaxAttempts = $MaxRetries,[int]$DelaySeconds = $RetryDelay)
@@ -276,12 +222,6 @@ function Start-ParallelDownloads {[CmdletBinding()]param([Parameter()][object[]]
     
     $runspacePool.Close()
     $runspacePool.Dispose()
-}
-
-# Add hash validation for downloads
-function Test-FileHash {[CmdletBinding()]param([Parameter(Mandatory)][string]$FilePath,[Parameter(Mandatory)][string]$ExpectedHash,[string]$Algorithm = 'SHA256')
-    $actualHash = (Get-FileHash -Path $FilePath -Algorithm $Algorithm).Hash
-    return $actualHash -eq $ExpectedHash
 }
 
 function Remove-OldCache {
