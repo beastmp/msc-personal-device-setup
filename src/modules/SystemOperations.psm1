@@ -218,18 +218,19 @@ class SystemOperations {
     # Environment Management
     [bool]SetEnvironmentVariable([string]$Name, [string]$Value) {
         try {
-            [System.Environment]::SetEnvironmentVariable($Name, $Value, [System.EnvironmentVariableTarget]::Machine)
+            [System.Environment]::SetEnvironmentVariable($Name, $Value,[System.EnvironmentVariableTarget]::Machine)
             $this.Logger.Log("VRBS", "Environment variable $Name set to $Value")
             return $true
         } catch {$this.Logger.Log("ERRR", "Unable to set environment variable $Name to ${Value}: $_");return $false}
     }
 
     [bool]AddToPath([string]$Value) {
-        $envPath = [System.Environment]::GetEnvironmentVariable("Path", [System.EnvironmentVariableTarget]::Machine)
+        $envPath = [System.Environment]::GetEnvironmentVariable("Path",[System.EnvironmentVariableTarget]::Machine)
         if ($envPath -notlike "*$Value*") {
             try {
-                [System.Environment]::SetEnvironmentVariable("Path", "$envPath;$Value", [System.EnvironmentVariableTarget]::Machine)
+                [System.Environment]::SetEnvironmentVariable("Path","$envPath;$Value",[System.EnvironmentVariableTarget]::Machine)
                 $this.Logger.Log("VRBS", "Added $Value to PATH")
+                $env:Path = [System.Environment]::GetEnvironmentVariable("Path",[System.EnvironmentVariableTarget]::Machine)
                 return $true
             } catch {$this.Logger.Log("ERRR", "Unable to add $Value to PATH: $_");return $false}
         }
