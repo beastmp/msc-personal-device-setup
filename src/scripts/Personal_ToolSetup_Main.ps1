@@ -511,10 +511,6 @@ try {
         $logger.Log("ERRR", "No software found for specified environment and server type.")
         return $false
     }
-    if (-not ($systemOps.Install-WingetProvider())) {
-        $logger.Log("ERRR", "Failed to install WinGet")
-        return $false
-    }
     $SoftwareList = $configManager.GetSoftwareList($ScriptsDirectory, $SoftwareListFileName)
     if (-not $SoftwareList) {$logger.Log("ERRR", "No software found for specified environment and server type."); return $false}
     if ($ApplicationName) {$SoftwareList = $SoftwareList | Where-Object {$_.Name -eq $ApplicationName -and (-not $ApplicationVersion -or $_.Version -eq $ApplicationVersion)}}
