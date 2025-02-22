@@ -635,16 +635,16 @@ if ($CleanupCache) {
     Remove-OldCache
 }
 
-if (-Not (Test-Path -Path $LogDirectory)) {New-Item -ItemType Directory -Path $LogDirectory -Force | Out-Null}
-$HostName   = hostname
-$Version    = $PSVersionTable.PSVersion.ToString()
-$logger.SetLogFileFormat($Config.logging.fileNameFormat) # Set the format from config
-$FileName = $logger.GetLogFileName("Transcript", $Action, $HostName, $Version)
-$FilePath   = Join-Path -Path $LogDirectory -ChildPath $FileName
-Start-Transcript -IncludeInvocationHeader -NoClobber -Path $FilePath
-if ($PSBoundParameters['Debug']) {$DebugPreference = 'Continue'}
+if (-Not (Test-Path -Path $LogDirectory)) {
+    New-Item -ItemType Directory -Path $LogDirectory -Force | Out-Null
+}
+
+# Remove transcript-related code and just set debug preference
+if ($PSBoundParameters['Debug']) {
+    $DebugPreference = 'Continue'
+}
+
 $ScriptStart = Get-Date
-# Set-Location -Path $ScriptsDirectory
 
 try {
     $logger.Log("PROG","Beginning main script execution...")
@@ -654,14 +654,12 @@ try {
     })
     
     $SoftwareList = Invoke-MainPreStep
-
     if ($ApplicationName) {
         $SoftwareList = $SoftwareList | Where-Object { 
             $_.Name -eq $ApplicationName -and 
             (-not $ApplicationVersion -or $_.Version -eq $ApplicationVersion)
         }
     }
-
     # Process software by installation type - Fix the loop structure
     foreach ($installType in @('Winget', 'PSModule', 'Other', 'Manual')) {
         $currentType = $installType
@@ -696,10 +694,9 @@ finally {
     if (Test-Path $StagingDirectory) {
         Remove-Item -Path $StagingDirectory -Recurse -Force -ErrorAction SilentlyContinue
     }
+    
+    $ScriptEnd = Get-Date
+    $ScriptTimeSpan = New-TimeSpan -Start $ScriptStart -End $ScriptEnd
+    $logger.Log("PROG", $("Main script execution completed in {0:00}:{1:00}:{2:00}:{3:00}" -f $ScriptTimeSpan.days, $ScriptTimeSpan.hours, $ScriptTimeSpan.minutes, $ScriptTimeSpan.seconds))
 }
-
-$ScriptEnd = Get-Date
-$ScriptTimeSpan = New-TimeSpan -Start $ScriptStart -End $ScriptEnd
-$logger.Log("PROG",$("Main script execution completed in {0:00}:{1:00}:{2:00}:{3:00}" -f $ScriptTimeSpan.days,$ScriptTimeSpan.hours,$ScriptTimeSpan.minutes,$ScriptTimeSpan.seconds))
-Stop-Transcript | Out-Null
 #endregion
