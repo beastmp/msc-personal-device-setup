@@ -27,7 +27,6 @@ $moduleOrder = @(
     @{Name="ConfigManager"; Path=Join-Path $modulePath "ConfigManager.psm1"},
     @{Name="SystemOperations"; Path=Join-Path $modulePath "SystemOperations.psm1"},
     @{Name="Monitoring"; Path=Join-Path $modulePath "Monitoring.psm1"},
-    @{Name="StateManager"; Path=Join-Path $modulePath "StateManager.psm1"},
     @{Name="ApplicationManager"; Path=Join-Path $modulePath "ApplicationManager.psm1"}
 )
 foreach ($module in $moduleOrder) {
@@ -47,9 +46,6 @@ try {
         (Join-Path $configManager.ResolvePath('logs') "telemetry.log")
     )
     $logger.Log("VRBS", "Logger fully initialized with proper paths")
-    
-    $stateManager = New-StateManager -StateFile $configManager.GetStatePath() -Logger $logger
-    $logger.Log("VRBS", "StateManager initialized successfully")
     
     $systemOps = New-SystemOperations -BinDir $configManager.ResolvePath("binaries") `
                                     -StagingDir $configManager.ResolvePath("staging") `
@@ -86,50 +82,6 @@ $script:SoftwareListFileName = $Config.files.softwareList
 #region     APPLICATION HELPERS
 #endregion
 #region     STEP HELPERS
-function Remove-OldCache {
-    [CmdletBinding()]
-    param()
-    
-    $cacheFiles = Get-ChildItem -Path $BinariesDirectory -Filter "*.cache"
-    $cutoffDate = (Get-Date).AddDays(-$CacheRetentionDays)
-    
-    foreach ($file in $cacheFiles) {
-        $cacheContent = Get-Content $file.FullName | ConvertFrom-Json
-        $cacheDate = [DateTime]::Parse($cacheContent.DateTime)
-        if ($cacheDate -lt $cutoffDate) {
-            Remove-Item $file.FullName -Force
-            $binaryPath = $file.FullName.Replace(".cache", "")
-            if (Test-Path $binaryPath) {
-                Remove-Item $binaryPath -Force
-            }
-        }
-    }
-}
-
-function Test-ApplicationDependencies {
-    [CmdletBinding()]
-    param([Parameter()][object]$Application)
-    
-    if (-not $Application.Dependencies) { return $true }
-    
-    foreach ($dep in $Application.Dependencies) {
-        if ($dep.Type -eq "Application") {
-            $installed = Test-Path $dep.InstallPath
-            if (-not $installed) {
-                $logger.Log("ERRR","Dependency $($dep.Name) not found at $($dep.InstallPath)")
-                return $false
-            }
-        }
-        elseif ($dep.Type -eq "WindowsFeature") {
-            $feature = Get-WindowsOptionalFeature -Online -FeatureName $dep.Name
-            if ($feature.State -ne "Enabled") {
-                $logger.Log("ERRR","Required Windows feature $($dep.Name) is not enabled")
-                return $false
-            }
-        }
-    }
-    return $true
-}
 #endregion
 #endregion
 #region TESTING
@@ -167,7 +119,7 @@ function Invoke-Test_WingetInstallPath {[CmdletBinding()]param([Parameter()][obj
         $TestArguments = @("--custom","--override")
         $CustomAttributes = @("TARGETDIR","TARGETPATH","TARGETLOCATION","TARGETFOLDER","INSTALLDIR","INSTALLPATH","INSTALLLOCATION","INSTALLFOLDER","DIR","D")
         $CustomAttributePrefixes = @("","/","-","--")
-        $CustomAttributeSeparators = @("=",":"," ")
+        $CustomAttributeSeparators = @("="," ",":")
         $CustomAttributeWrappers = @("","`"","'")
         $CustomValueWrappers = @("","`"","'")
 
@@ -268,169 +220,6 @@ function Invoke-Testing {[CmdletBinding()]param([Parameter()][object]$Applicatio
     return $true
 }
 #endregion
-#region DOWNLOAD
-function Invoke-DownloadSoftware {
-    [CmdletBinding()]
-    param([Parameter()][object]$Application)
-    
-    if(-not $Application.Download) { return $true }
-    
-    $cacheKey = "$($Application.Name)_$($Application.Version)"
-    $cachePath = Join-Path $BinariesDirectory "$cacheKey.cache"
-    
-    if (Test-Path $cachePath) {
-        $cached = Get-Content $cachePath | ConvertFrom-Json
-        if ($cached.Hash -and (Test-FileHash -FilePath $Application.BinaryPath -ExpectedHash $cached.Hash)) {
-            $logger.Log("INFO", "Using cached version of $($Application.Name) v$($Application.Version)")
-            return $true
-        }
-    }
-    
-    $downloadScript = {
-        if ($Application.InstallationType -eq "Winget") {
-            $TempBinaryPath = $($Application.BinaryPath).Replace([System.IO.Path]::GetExtension($Application.BinaryPath), "")
-            $logger.Log("INFO","Downloading $($Application.Name) version $($Application.Version) from winget to $TempBinaryPath...")
-            Add-Folders -DirPath $TempBinaryPath
-            $version = (Find-WinGetPackage -Id $Application.ApplicationID -MatchOption Equals).Version
-            $DownloadArguments = @("--version",$version,"--download-directory", "`"$TempBinaryPath`"","--accept-source-agreements","--accept-package-agreements")
-            if ($Application.MachineScope) {$DownloadArguments += @("--scope","machine")}
-            try {
-                $Process = Invoke-Process -Path "winget" -Action "download" -Application @("--id",$Application.ApplicationID) -Arguments $DownloadArguments
-                if ($Process.ExitCode -eq 0 -or $null -eq $Process.ExitCode) {
-                    $logger.Log("SCSS","$($Application.Name) v$version downloaded successfully")
-                } else {
-                    $errorMessage = $process.StandardError.ReadToEnd()
-                    $logger.Log("ERRR","$($Application.Name) download failed with exit code $($process.ExitCode). Error: $errorMessage")
-                    return $false
-                }
-            }
-            catch{$logger.Log("ERRR","Unable to download $($Application.Name) using winget"); $logger.Log("DBUG","Error: $($_.Exception.Message)"); return $false}
-            $files = Get-ChildItem -Path $TempBinaryPath
-            foreach ($file in $files) {
-                $NewFileName = if($file.PSIsContainer) {"$($Application.Name)_$($Application.Version)_$($file.Name)"}
-                else{"$($Application.Name)_$($Application.Version)$($file.Extension)"}
-                $destinationPath = Join-Path -Path $BinariesDirectory -ChildPath $NewFileName
-                $logger.Log("VRBS","Moving file $($file.FullName) to $destinationPath")
-                try {
-                    Move-Item -Path $file.FullName -Destination $destinationPath -Force
-                    $logger.Log("VRBS","Moved $($file.Name) to $destinationPath")
-                } catch {$logger.Log("ERRR","Failed to move $($file.Name) to $destinationPath. Error: $($_.Exception.Message)")}
-            }
-            # Remove the application binary path after moving files
-            try {
-                Remove-Item -Path $TempBinaryPath -Recurse -Force
-                $logger.Log("VRBS","Removed application binary path: $TempBinaryPath")
-            } catch {$logger.Log("ERRR","Failed to remove application binary path: $TempBinaryPath. Error: $($_.Exception.Message)")}
-        } else {
-            $logger.Log("VRBS","Checking for $($Application.Name) version $($Application.Version) in $($Application.BinaryPath)...")
-            if (-not (Test-Path $($Application.BinaryPath))) {
-                $logger.Log("INFO","Downloading $($Application.Name) version $($Application.Version) from $($Application.DownloadURL) to $($Application.BinaryPath)...")
-                $logger.Log("VRBS","Executing Invoke-WebRequest for $($Application.DownloadURL) to $($Application.BinaryPath)")
-                try {
-                    Invoke-WebRequest -Uri $Application.DownloadURL -OutFile $($Application.BinaryPath)
-                    $logger.Log("SCSS","Download of $($Application.Name) v$($Application.Version) completed successfully")
-                }
-                catch {$logger.Log("ERRR","Execution of Invoke-WebRequest for $($Application.DownloadURL) to $($Application.BinaryPath) unsuccessful");return $false}
-            } else {$logger.Log("WARN","$($Application.Name) v$($Application.Version) already exists in $($Application.BinaryPath)")}
-        }
-        $logger.Log("VRBS","Copying from $($Application.BinaryPath) to $($Application.StagedPath)")
-        if(Test-Path $($Application.BinaryPath)) {
-            try {Copy-Item -Path $($Application.BinaryPath) -Destination $($Application.StagedPath) -Force}
-            catch {$logger.Log("ERRR","Unable to copy from $($Application.BinaryPath) to $($Application.StagedPath)");return $false}
-        }
-        Invoke-ScriptStep -StepName "PostDownload" -Application $Application
-    }
-    
-    $systemOps.InvokeWithRetry($downloadScript, "download $($Application.Name)")
-    
-    # Cache the download info
-    $hash = (Get-FileHash -Path $Application.BinaryPath).Hash
-    @{Hash=$hash; DateTime=Get-Date -Format "o"} | ConvertTo-Json | Set-Content $cachePath
-    
-    return $true
-}
-#endregion
-#region INSTALL
-function Invoke-InstallSoftware {[CmdletBinding()]param([Parameter()][object]$Application)
-    if($Application.Install) {
-        if (-not (Invoke-ScriptStep -StepName "PreInstall" -Application $Application)) {$logger.Log("ERRR","Pre-install step failed"); return $false}
-        if($Application.SymLinkPath){Add-SymLink -SourcePath $Application.SymLinkPath -TargetPath $Application.InstallPath}
-        # $logger.Log("INFO","Starting installation of $($Application.Name) v$($Application.Version)...")
-        if ($Application.InstallationType -eq "Winget") {
-            $version = (Find-WinGetPackage -Id $Application.ApplicationID -MatchOption Equals).Version
-            $logger.Log("INFO","Installing $($Application.Name) v$version from winget...")
-            $FileName   = Get-LogFileName -LogType "Transcript" -Action 'Install' -TargetName $Application.Name -Version $version
-            $FilePath   = Join-Path -Path $LogDirectory -ChildPath $FileName
-            $BaseArguments = @("--accept-source-agreements","--accept-package-agreements","--force","--log",$FilePath)
-            $ApplicationArguments = if($Application.Download -and (Test-Path -Path $($Application.BinaryPath).Replace([System.IO.Path]::GetExtension($Application.BinaryPath),".yaml"))) {
-                @("--manifest",$($Application.BinaryPath).Replace([System.IO.Path]::GetExtension($Application.BinaryPath),".yaml"))
-            } else {@("--id",$Application.ApplicationID)}
-            $InstallArguments = $BaseArguments
-            if ($Application.InstallerArguments) {$InstallArguments += $Application.InstallerArguments}
-            try {
-                $Process = Invoke-Process -Path "winget" -Action "install" -Application $ApplicationArguments -Arguments $InstallArguments
-                if ($Process.ExitCode -eq 0 -or $null -eq $Process.ExitCode) {
-                    $logger.Log("SCSS","$($Application.Name) v$version installed successfully")
-                } else {
-                    $logger.Log("ERRR","$($Application.Name) installation failed with exit code $($Process.ExitCode)")
-                    return $false
-                }
-            }
-            catch{$logger.Log("ERRR","Unable to install $($Application.Name) using winget"); $logger.Log("DBUG","Error: $($_.Exception.Message)"); return $false}
-        } elseif ($Application.InstallationType -eq "PSModule") {
-            Install-PSModule -ModuleName $Application.ModuleID
-        } else {
-            $FileType = [System.IO.Path]::GetExtension($Application.StagedPath)
-            switch ($FileType) {
-                ".zip" {
-                    $logger.Log("INFO","Extracting ZIP file for $($Application.Name) v$($Application.Version) to $($Application.InstallPath)...")
-                    $logger.Log("DBUG","Executing Expand-Archive -Path $($Application.StagedPath) -DestinationPath $($Application.InstallPath) -Force")
-                    try{
-                        Expand-Archive -Path $Application.StagedPath -DestinationPath $Application.InstallPath -Force
-                        $logger.Log("SCSS","$($Application.Name) v$version extracted successfully")
-                    }
-                    catch{$logger.Log("ERRR","Extraction of $($Application.StagedPath) to $($Application.InstallPath) failed"); return $false}
-                }
-                ".msi" {
-                    $logger.Log("INFO","Running MSI installer for $($Application.Name) v$($Application.Version)...")
-                    try{
-                        $BaseArguments = @("/passive","/norestart")
-                        $InstallArguments = $Application.InstallArguments + $BaseArguments
-                        Invoke-Process -Path "msiexec.exe" -Action "/i" -Application @("`"$($Application.StagedPath)`"") -Arguments $InstallArguments -Wait
-                        $logger.Log("SCSS","$($Application.Name) v$version installed successfully")
-                    }
-                    catch{$logger.Log("ERRR","Installation of $($Application.Name) v$($Application.Version) failed"); return $false}
-                }
-                ".exe" {
-                    $logger.Log("INFO","Running installer for $($Application.Name) v$($Application.Version)...")
-                    try{
-                        $Process = Invoke-Process -Path $Application.StagedPath -Arguments $Application.InstallerArguments
-                        if ($Process.ExitCode -eq 0 -or $null -eq $Process.ExitCode) {
-                                    $logger.Log("SCSS","$($Application.Name) v$version installed successfully")
-                        } else {
-                            $logger.Log("ERRR","$($Application.Name) installation failed with exit code $($Process.ExitCode)")
-                            return $false
-                        }
-                        # $logger.Log("SCSS","$($Application.Name) v$version installed successfully")
-                    }
-                    catch{$logger.Log("ERRR","Installation of $($Application.Name) v$($Application.Version) failed"); return $false}
-                }
-            }
-        }
-        if($Application.ProcessIDs){foreach($Process in $Application.ProcessIDs){Invoke-KillProcess $Process}}
-        Invoke-ScriptStep -StepName "PostInstall" -Application $Application
-        if(-not((Test-Path $Application.InstallPath) -and (Get-ChildItem -Path $Application.InstallPath).Count -gt 0)) {
-            $logger.Log("WARN","Validation of InstallPath ($($Application.InstallPath)) failed for $($Application.Name) v$($Application.Version)")
-        }
-    } else {$logger.Log("VRBS","Install flag for $($Application.Name) v$($Application.Version) set to false")}
-    if(Test-Path $($Application.StagedPath)) {
-        $logger.Log("VRBS","Executing Move-Item from $($Application.StagedPath) to $($Application.PostInstallPath)")
-        try{Move-Item -Path $Application.StagedPath -Destination $Application.PostInstallPath -Force}
-        catch{$logger.Log("ERRR","Unable to move item from $($Application.StagedPath) to $($Application.PostInstallPath)"); return $false}
-    }
-    return $true
-}
-#endregion
 #region MAIN
 function Invoke-MainAction {
     [CmdletBinding()]
@@ -501,7 +290,9 @@ function Invoke-MainAction {
 # Helper function to determine if an app should be processed
 function ShouldProcessApp {param([Parameter()][object]$app);return (-not $TestingMode) -or (-not $app.TestingComplete)}
 
-if ($CleanupCache) {Remove-OldCache}
+if ($CleanupCache) {
+    $systemOps.CleanupCache(30)
+}
 if ($PSBoundParameters['Debug']) {$DebugPreference = 'Continue'}
 $logger.TrackEvent("ScriptStart", @{Action = $Action;TestingMode = $TestingMode})
 try {
@@ -525,7 +316,8 @@ try {
     }
 } catch {$logger.TrackEvent("ScriptError", @{Error = $_.Exception.Message;Stack = $_.ScriptStackTrace});throw}
 finally {
-    $stateManager.CleanupOldStates(30)
+    $configManager.CleanupOldState(30)
+    $systemOps.CleanupCache(30)
     if (Test-Path $StagingDirectory) {Remove-Item -Path $StagingDirectory -Recurse -Force -ErrorAction SilentlyContinue}
     $logger.TrackEvent("ScriptEnd", @{Success = $true;Duration = $ScriptTimeSpan.TotalSeconds;})
 }

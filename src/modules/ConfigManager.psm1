@@ -6,8 +6,10 @@ class ConfigManager {
     hidden [object]$Logger
     [object]$Config
     [System.Collections.ArrayList]$ValidationErrors
+    [hashtable]$State = @{}
+    [string]$StateFile
     
-    ConfigManager([string]$configPath,[object]$logger){
+    ConfigManager([string]$configPath, [object]$logger) {
         $this.ValidationErrors = [System.Collections.ArrayList]::new()
         $this.Logger = $logger
         $resolvedConfigPath = [System.IO.Path]::GetFullPath($configPath)
@@ -16,6 +18,8 @@ class ConfigManager {
             throw "Configuration file not found"
         }
         $this.LoadConfig($resolvedConfigPath)
+        $this.StateFile = Join-Path (Split-Path $resolvedConfigPath -Parent) "state.json"
+        $this.LoadState()
     }
     
     # Configuration methods
@@ -102,6 +106,56 @@ class ConfigManager {
             return $softwareList
         }
         catch {$this.Logger.Log("ERRR", "Unable to save software list: $_");return $null}
+    }
+
+    # Add state management methods
+    [void]LoadState() {
+        if (Test-Path $this.StateFile) {
+            try {
+                $jsonContent = Get-Content $this.StateFile | ConvertFrom-Json
+                $this.State = @{}
+                if($jsonContent) {
+                    $jsonContent.PSObject.Properties | ForEach-Object {
+                        $this.State[$_.Name] = $_.Value
+                    }
+                }
+                $this.Logger.Log("VRBS", "State loaded successfully from $($this.StateFile)")
+            }
+            catch {
+                $this.Logger.Log("ERRR", "Failed to load state: $_")
+            }
+        }
+    }
+
+    [void]SaveState() {
+        $this.State | ConvertTo-Json | Set-Content $this.StateFile
+    }
+
+    [void]SetApplicationState([string]$appName, [string]$version, [object]$state) {
+        $key = "$appName-$version"
+        $this.State[$key] = $state
+        $this.SaveState()
+    }
+
+    [object]GetApplicationState([string]$appName, [string]$version) {
+        return $this.State["$appName-$version"]
+    }
+
+    [void]CleanupOldState([int]$daysToKeep) {
+        $cutoff = (Get-Date).AddDays(-$daysToKeep)
+        $keysToRemove = @()
+        
+        foreach($entry in $this.State.GetEnumerator()) {
+            if($entry.Value.LastAccessed -lt $cutoff) {
+                $keysToRemove += $entry.Key
+            }
+        }
+        
+        foreach($key in $keysToRemove) {
+            $this.State.Remove($key)
+        }
+        
+        $this.SaveState()
     }
 }
 

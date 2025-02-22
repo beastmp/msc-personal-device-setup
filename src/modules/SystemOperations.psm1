@@ -22,6 +22,8 @@ class SystemOperations {
 
     [bool]$RetryEnabled
     [bool]$ParallelEnabled
+
+    hidden [int]$CacheRetentionDays = 30
     
     # Update constructor to accept Logger and Config
     SystemOperations([string]$binDir, [string]$stagingDir, [string]$installDir, [object]$logger, [object]$config) {
@@ -270,6 +272,58 @@ class SystemOperations {
             }
         }
         return $true
+    }
+
+    [void]CleanupCache([int]$daysToKeep = 30) {
+        $cutoff = (Get-Date).AddDays(-$daysToKeep)
+        $cacheFiles = Get-ChildItem -Path $this.BinariesDirectory -Filter "*.cache"
+        
+        foreach ($file in $cacheFiles) {
+            try {
+                $cacheContent = Get-Content $file.FullName | ConvertFrom-Json
+                $cacheDate = [DateTime]::Parse($cacheContent.DateTime)
+                if ($cacheDate -lt $cutoff) {
+                    $this.Logger.Log("VRBS", "Removing old cache file: $($file.Name)")
+                    Remove-Item $file.FullName -Force
+                    $binaryPath = $file.FullName.Replace(".cache", "")
+                    if (Test-Path $binaryPath) {
+                        $this.Logger.Log("VRBS", "Removing associated binary: $($binaryPath)")
+                        Remove-Item $binaryPath -Force
+                    }
+                }
+            }
+            catch {
+                $this.Logger.Log("ERRR", "Failed to process cache file $($file.Name): $_")
+            }
+        }
+    }
+
+    [void]SaveToCache([string]$key, [string]$filePath) {
+        $cacheKey = [System.IO.Path]::GetFileNameWithoutExtension($key)
+        $cachePath = Join-Path $this.BinariesDirectory "$cacheKey.cache"
+        $hash = (Get-FileHash -Path $filePath).Hash
+        @{
+            Hash = $hash
+            DateTime = Get-Date -Format "o"
+            FilePath = $filePath
+        } | ConvertTo-Json | Set-Content $cachePath
+    }
+
+    [bool]ValidateCache([string]$key, [string]$filePath) {
+        $cacheKey = [System.IO.Path]::GetFileNameWithoutExtension($key)
+        $cachePath = Join-Path $this.BinariesDirectory "$cacheKey.cache"
+        
+        if (Test-Path $cachePath) {
+            try {
+                $cached = Get-Content $cachePath | ConvertFrom-Json
+                return $this.ValidateFileHash($filePath, $cached.Hash)
+            }
+            catch {
+                $this.Logger.Log("ERRR", "Failed to validate cache: $_")
+                return $false
+            }
+        }
+        return $false
     }
 }
 

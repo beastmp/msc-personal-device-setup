@@ -36,13 +36,11 @@ class Dependency {
 
 class ApplicationManager {
     hidden [object]$SystemOps
-    hidden [object]$StateManager
     hidden [object]$Logger
     hidden [object]$ConfigManager
     
-    ApplicationManager([object]$sysOps,[object]$stateManager,[object]$logger,[object]$configManager) {
+    ApplicationManager([object]$sysOps, [object]$logger, [object]$configManager) {
         $this.SystemOps = $sysOps
-        $this.StateManager = $stateManager
         $this.Logger = $logger
         $this.ConfigManager = $configManager
     }
@@ -133,7 +131,8 @@ class ApplicationManager {
     }
 
     [bool]Download([ApplicationConfig]$app) {
-        if(-not $app.Download){return $true}
+        if(-not $app.Download) { return $true }
+        $state = $this.ConfigManager.GetApplicationState($app.Name, $app.Version)
         return $this.SystemOps.InvokeWithRetry({
             $preSuccess = $this.InvokeStep($app.Name,"Pre","Download",$app)
             if (-not $preSuccess) {$this.Logger.Log("WARN", "$($app.Name) PreDownload step failed. Proceeding with download...")}
@@ -335,12 +334,11 @@ function New-ApplicationManager {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory=$true)][object]$SystemOps,
-        [Parameter(Mandatory=$true)][object]$StateManager,
         [Parameter(Mandatory=$true)][object]$Logger,
         [Parameter(Mandatory=$true)][object]$ConfigManager
     )
     
-    return [ApplicationManager]::new($SystemOps, $StateManager, $Logger, $ConfigManager)
+    return [ApplicationManager]::new($SystemOps, $Logger, $ConfigManager)
 }
 
 Export-ModuleMember -Function New-ApplicationManager
