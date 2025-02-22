@@ -19,6 +19,7 @@ param (
     [switch]$ParallelDownloads,
     [switch]$CleanupCache
 )
+#endregion
 
 # Resolve module paths and import modules
 $modulePath = Split-Path -Parent $PSScriptRoot
@@ -100,6 +101,7 @@ function Invoke-MainPreStep {[CmdletBinding()]param()
     return $SoftwareList
 }
 
+#region HELPERS
 #region     APPLICATION HELPERS
 function Install-Winget {[CmdletBinding()]param()
     if(-not (Get-Command winget -ErrorAction SilentlyContinue)) {
@@ -115,7 +117,6 @@ function Install-Winget {[CmdletBinding()]param()
 }   
 #endregion
 #region     STEP HELPERS
-
 function Invoke-MainInstallPreStep {[CmdletBinding()]param()
     $logger.Log("INFO","Starting main install pre-step...")
     foreach ($dir in @($BinariesDirectory, $StagingDirectory, $PostInstallDirectory)) {
