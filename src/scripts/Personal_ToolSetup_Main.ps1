@@ -16,7 +16,6 @@ param (
     [string]$ApplicationVersion,
     
     [switch]$TestingMode,
-    [switch]$ParallelDownloads,
     [switch]$CleanupCache
 )
 #endregion
@@ -83,15 +82,6 @@ $script:SoftwareListFileName = $Config.files.softwareList
 
 #trap {Write-Error $_;exit 1}
 
-function Invoke-MainPreStep {[CmdletBinding()]param()
-    $logger.Log("INFO", "Starting main pre-step...")
-    if (-not (Install-Winget)) {$logger.Log("ERRR", "Failed to install WinGet"); return $false}
-    $SoftwareList = $configManager.GetSoftwareList($ScriptsDirectory, $SoftwareListFileName)
-    if (-not $SoftwareList) {$logger.Log("ERRR", "No software found for specified environment and server type."); return $false}
-    $logger.Log("INFO", "Main pre-step complete")
-    return $SoftwareList
-}
-
 #region HELPERS
 #region     APPLICATION HELPERS
 function Install-Winget {[CmdletBinding()]param()
@@ -108,48 +98,6 @@ function Install-Winget {[CmdletBinding()]param()
 }   
 #endregion
 #region     STEP HELPERS
-function Invoke-MainInstallPreStep {[CmdletBinding()]param()
-    $logger.Log("INFO","Starting main install pre-step...")
-    $logger.Log("INFO","Main install pre-step complete")
-    return $true
-}
-
-function Invoke-MainUninstallPreStep {[CmdletBinding()]param()
-    $logger.Log("INFO","Starting main uninstall pre-step...")
-    $logger.Log("INFO","Main uninstall pre-step complete")
-    return $true
-}
-
-function Invoke-MainTestPreStep {[CmdletBinding()]param()
-    $logger.Log("INFO","Starting main install pre-step...")
-    $logger.Log("INFO","Main install pre-step complete")
-    return $true
-}
-
-function Invoke-MainPostStep {[CmdletBinding()]param()
-    $logger.Log("INFO","Starting main post-step...")
-    $logger.Log("INFO","Main post-step complete")
-    # return $true
-}
-
-function Invoke-MainInstallPostStep {[CmdletBinding()]param()
-    $logger.Log("INFO","Starting main install post-step...")
-    $logger.Log("INFO","Main install post-step complete")
-    # return $true
-}
-
-function Invoke-MainUninstallPostStep {[CmdletBinding()]param()
-    $logger.Log("INFO","Starting main uninstall post-step...")
-    $logger.Log("INFO","Main uninstall post-step complete")
-    return $true
-}
-
-function Invoke-MainTestPostStep {[CmdletBinding()]param()
-    $logger.Log("INFO","Starting main uninstall post-step...")
-    $logger.Log("INFO","Main uninstall post-step complete")
-    return $true
-}
-
 function Remove-OldCache {
     [CmdletBinding()]
     param()
@@ -502,7 +450,8 @@ function Invoke-MainAction {
     
     switch ($Action) {
         "Install" {
-            if (-not (Invoke-MainInstallPreStep)) { return $false }
+            $preSuccess = $appManager.InvokeStep("Main","Pre","Install")
+            if (-not $preSuccess) {$this.Logger.Log("WARN", "Main PreInstall step failed. Proceeding with app installation...")}
             
             foreach ($app in $SoftwareList) {
                 if (-not (ShouldProcessApp $app)) { continue }
@@ -530,28 +479,33 @@ function Invoke-MainAction {
                 }
             }
             
-            Invoke-MainInstallPostStep
+            $postSuccess = $appManager.InvokeStep("Main","Post","Install")
+            if (-not $postSuccess) {$this.Logger.Log("WARN", "Main PostInstall step failed")}
         }
         
         "Uninstall" {
-            if(-not(Invoke-MainUninstallPreStep)){return $false}
+            $preSuccess = $appManager.InvokeStep("Main","Pre","Uninstall")
+            if (-not $preSuccess) {$this.Logger.Log("WARN", "Main PreUninstall step failed. Proceeding with uninstallation...")}
             [Array]::Reverse($SoftwareList)
             foreach($app in $SoftwareList){
                 if (-not (ShouldProcessApp $app)) { continue }
                 $logger.Log("PROG", "Processing uninstallation for $($app.Name)")
                 if (-not $appManager.Uninstall($app)) {$logger.Log("ERRR", "Uninstallation failed for $($app.Name)");continue}
             }
-            Invoke-MainUninstallPostStep
+            $postSuccess = $appManager.InvokeStep("Main","Post","Uninstall")
+            if (-not $postSuccess) {$this.Logger.Log("WARN", "Main PostUninstall step failed")}
         }
         
         "Test" {
-            if (-not (Invoke-MainTestPreStep)) { return $false }
+            $preSuccess = $appManager.InvokeStep("Main","Pre","Test")
+            if (-not $preSuccess) {$this.Logger.Log("WARN", "Main PreTest step failed. Proceeding with testing...")}
             foreach ($app in $SoftwareList) {
                 if (-not (ShouldProcessApp $app)) { continue }
                 $logger.Log("INFO", "Testing $($app.Name)")
                 Invoke-Testing -Application $app
             }
-            Invoke-MainTestPostStep
+            $postSuccess = $appManager.InvokeStep("Main","Post","Test")
+            if (-not $postSuccess) {$this.Logger.Log("WARN", "Main PostTest step failed")}
         }
     }
 }
@@ -564,7 +518,9 @@ if ($PSBoundParameters['Debug']) {$DebugPreference = 'Continue'}
 $logger.TrackEvent("ScriptStart", @{Action = $Action;TestingMode = $TestingMode})
 try {
     $logger.Log("PROG","Beginning main script execution...")
-    $SoftwareList = Invoke-MainPreStep
+    if (-not (Install-Winget)) {$logger.Log("ERRR", "Failed to install WinGet"); return $false}
+    $SoftwareList = $configManager.GetSoftwareList($ScriptsDirectory, $SoftwareListFileName)
+    if (-not $SoftwareList) {$logger.Log("ERRR", "No software found for specified environment and server type."); return $false}
     if ($ApplicationName) {$SoftwareList = $SoftwareList | Where-Object {$_.Name -eq $ApplicationName -and (-not $ApplicationVersion -or $_.Version -eq $ApplicationVersion)}}
     foreach ($installType in @('Winget', 'PSModule', 'Other', 'Manual')) {
         $currentType = $installType

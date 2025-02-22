@@ -135,7 +135,8 @@ class ApplicationManager {
     [bool]Download([ApplicationConfig]$app) {
         if(-not $app.Download){return $true}
         return $this.SystemOps.InvokeWithRetry({
-            if(-not $this.InvokeStep($app,"PreDownload")){return $false}
+            $preSuccess = $this.InvokeStep($app.Name,"Pre","Download",$app)
+            if (-not $preSuccess) {$this.Logger.Log("WARN", "$($app.Name) PreDownload step failed. Proceeding with download...")}
             $cacheKey = "$($app.Name)_$($app.Version)"
             $cachePath = Join-Path $this.ConfigManager.ResolvePath('binaries') "$cacheKey.cache"
             if (Test-Path $cachePath) {
@@ -153,7 +154,8 @@ class ApplicationManager {
             if ($success) {
                 $hash = (Get-FileHash -Path $app.BinaryPath).Hash
                 @{Hash=$hash;DateTime=Get-Date -Format "o"} | ConvertTo-Json | Set-Content $cachePath
-                if(-not $this.InvokeStep($app,"PostDownload")){return $false}
+                $postSuccess = $this.InvokeStep($app.Name,"Post","Download",$app)
+                if (-not $postSuccess) {$this.Logger.Log("WARN", "$($app.Name) PostDownload step failed")}
             }
             return $success
         }, "download $($app.Name)")
@@ -171,7 +173,8 @@ class ApplicationManager {
     [bool]Install([ApplicationConfig]$app) {
         if(-not $app.Install){return $true}
         return $this.SystemOps.InvokeWithRetry({
-            if(-not $this.InvokeStep($app,"PreInstall")){return $false}
+            $preSuccess = $this.InvokeStep($app.Name,"Pre","Install",$app)
+            if (-not $preSuccess) {$this.Logger.Log("WARN", "$($app.Name) PreInstall step failed. Proceeding with installation...")}
             if($app.SymLinkPath){$this.SystemOps.AddSymLink($app.SymLinkPath,$app.InstallPath)}
             $success = switch ($app.InstallationType) {
                 "Winget"    {$this.InstallWingetPackage($app)}
@@ -180,7 +183,8 @@ class ApplicationManager {
             }
             if($success) {
                 if($app.ProcessIDs) {foreach($procId in $app.ProcessIDs) {$this.SystemOps.KillProcess($procId)}}
-                $this.InvokeStep($app, "PostInstall")
+                $postSuccess = $this.InvokeStep($app.Name,"Post","Install",$app)
+                if (-not $postSuccess) {$this.Logger.Log("WARN", "$($app.Name) PostInstall step failed")}
                 if(Test-Path $app.StagedPath) {$this.SystemOps.MoveFolder($app.StagedPath, $app.PostInstallPath)}
             }
             return $success
@@ -189,29 +193,36 @@ class ApplicationManager {
     
     [bool]Uninstall([ApplicationConfig]$app) {
         return $this.SystemOps.InvokeWithRetry({
-            if(-not $this.InvokeStep($app,"PreUninstall")){return $false}
+            $preSuccess = $this.InvokeStep($app.Name,"Pre","Uninstall",$app)
+            if (-not $preSuccess) {$this.Logger.Log("WARN", "$($app.Name) PreUninstall step failed. Proceeding with uninstallation...")}
             $success = switch($app.InstallationType) {
                 "Winget"    {$this.UninstallWingetPackage($app)}
                 "PSModule"  {$this.UninstallPSModule($app)}
                 default     {$this.UninstallDirectPackage($app)}
             }
             if($success) {
-                $this.InvokeStep($app, "PostUninstall")
-                if($app.InstallPath -and (Test-Path $app.InstallPath)) {
+                $postSuccess = $this.InvokeStep($app.Name,"Post","Uninstall",$app)
+                if (-not $postSuccess) {$this.Logger.Log("WARN", "$($app.Name) PostUninstall step failed")}
+                    if($app.InstallPath -and (Test-Path $app.InstallPath)) {
                     Remove-Item -Path $app.InstallPath -Recurse -Force
                 }
             }
             return $success
         }, "uninstall $($app.Name)")
     }
+
+    hidden [bool]InvokeStep([string]$appName,[string]$prefix,[string]$action) {return $this.InvokeStep($appName,$prefix,$action,$null)}
     
-    hidden [bool]InvokeStep([ApplicationConfig]$app,[string]$stepName) {
-        $functionName = "Invoke-${stepName}_$($app.Name)"
-        if(Get-Command $functionName -ERRRAction SilentlyContinue) {
-            $this.Logger.Log("INFO", "Running $stepName for $($app.Name)")
-            return & $functionName -Application $app
-        }
-        return $true
+    hidden [bool]InvokeStep([string]$appName,[string]$prefix,[string]$action,[ApplicationConfig]$app=$null) {
+        $functionName = "Invoke-${appName}_${prefix}${action}"
+        $success = $true
+        if(Get-Command $functionName -ErrorAction SilentlyContinue) {
+            $this.Logger.Log("INFO", "Starting $("${appName} ${prefix}${action}") step...")
+            $success = if($app){& $functionName -Application $app}else{& $functionName}
+        } else {$this.Logger.Log("VRBS", "$("${appName} ${prefix}${action}") step not defined - SKIPPING")}
+        if ($success) {$this.Logger.Log("SCSS", "$("${appName} ${prefix}${action}") step completed successfully")}
+        else {$this.Logger.Log("ERRR", "$("${appName} ${prefix}${action}") step failed")}
+        return $success
     }
     
     hidden [bool]DownloadWingetPackage([ApplicationConfig]$app) {
