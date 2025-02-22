@@ -395,7 +395,7 @@
     "TestingComplete": true
   },
   {
-    "Name": "MusicBrains_Picard",
+    "Name": "MusicBrainz_Picard",
     "Version": "latest",
     "Download": true,
     "Install": true,

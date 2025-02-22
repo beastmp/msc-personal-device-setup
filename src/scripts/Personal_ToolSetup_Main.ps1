@@ -114,58 +114,6 @@ function Get-LogFileName {param([Parameter()][ValidateSet("Log","Transcript")][s
     $FileName   = $Config.logging.fileNameFormat.Replace("{LogType}", $LogType).Replace("{ScriptName}", $ScriptName).Replace("{Action}", $Action).Replace("{TargetName}", $TargetName).Replace("{Version}", $Version).Replace("{DateTime}", $DateTime)
     return $FileName
 }
-
-function Log-Message {[CmdletBinding()]param([Parameter()][ValidateSet("INFO","SCSS","ERRR","WARN","DBUG","VRBS","PROG")][string]$LogLevel="INFO",[Parameter()][string]$Message)
-    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-    $color = switch ($LogLevel) {"SCSS"{"Green"}"ERRR"{"Red"}"WARN"{"Yellow"}"DBUG"{"Cyan"}"VRBS"{"DarkYellow"}"PROG"{"Magenta"}default{"White"}}
-    if ($LogLevel -eq "DBUG" -and -not ($PSBoundParameters.Debug -eq $true)) {return}
-    if ($LogLevel -eq "VRBS" -and -not ($PSBoundParameters.Verbose -eq $true)) {return}
-    Write-Host "[$timestamp] [$LogLevel] $Message" -ForegroundColor $color
-}
-#endregion
-#region     PROCESS HELPERS
-function Invoke-StartProcess {[CmdletBinding()]param([Parameter()][string]$Command,[Parameter()][object]$Arguments)
-    if($Arguments -is [array]) {
-        $Arguments = $Arguments -join ' '
-    }
-    $process = New-Object System.Diagnostics.Process
-    $process.StartInfo.UseShellExecute = $false
-    $process.StartInfo.RedirectStandardOutput = $true
-    $process.StartInfo.RedirectStandardError = $true
-    $process.StartInfo.FileName = $Command
-    if($Arguments) { $process.StartInfo.Arguments = $Arguments }
-    $out = $process.Start()
-    $out | Out-String
-    $StandardError = $process.StandardError.ReadToEnd()
-    $StandardOutput = $process.StandardOutput.ReadToEnd()
-    $StandardError | Out-String
-    $StandardOutput | Out-String
-    $output = New-Object PSObject
-    $output | Add-Member -type NoteProperty -name StandardOutput -Value $StandardOutput
-    $output | Add-Member -type NoteProperty -name StandardError -Value $StandardError
-    $output | Add-Member -type NoteProperty -name ExitCode -Value $process.ExitCode
-    return $output
-}
-
-function Invoke-Process {[CmdletBinding()]param([Parameter()][string]$Path,[Parameter()][string]$Action,[Parameter()][string[]]$Application,[Parameter()][string[]]$Arguments)
-    $FullArguments = $(@($Action) + $Application + $Arguments) | Where-Object { $_ -ne "" -and $_ -ne " " -and $null -ne $_ }
-    $Command = "$Path $($FullArguments -join ' ')"
-    $PowershellCommand = "Start-Process -FilePath '$Path' -ArgumentList '$FullArguments' -NoNewWindow -Wait"
-    Log-Message "DBUG" "Command: $Command" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
-    Log-Message "DBUG" "Powershell Command: $PowershellCommand" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
-    $Process = Start-Process -FilePath "$Path" -ArgumentList $FullArguments -NoNewWindow -PassThru | Wait-Process
-    return $Process
-}
-
-function Invoke-KillProcess {[CmdletBinding()]param([Parameter()][string]$ProcessName)
-    Start-Sleep -Seconds 15
-    $TargetProcess = Get-Process $ProcessName -ErrorAction SilentlyContinue
-    if ($TargetProcess) {
-        Log-Message "VRBS" "Closing $ProcessName..." -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
-        $TargetProcess | Stop-Process -Force
-        Log-Message "VRBS" "$ProcessName closed successfully" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose}
-    else {Log-Message "WARN" "$ProcessName process not found" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose}
-}
 #endregion
 #region     ENVIRONMENT HELPERS
 function Set-EnvironmentVariable {[CmdletBinding()]param([Parameter()][string]$Name,[Parameter()][string]$Value)
@@ -271,28 +219,6 @@ function Install-Winget {[CmdletBinding()]param()
     }
     return $true
 }   
-
-function Install-PSModule {[CmdletBinding()]param([Parameter()][string]$ModuleName,[Parameter()][string]$RepositoryName,[Parameter()][string]$Version,[Parameter()][bool]$WhatIfFlag=$false)
-    Remove-PSModule -ModuleName $ModuleName -WhatIfFlag:$WhatIfFlag
-    $installParams = @{Name=$ModuleName;Force=$true;Confirm=$false}
-    if ($RepositoryName) {$installParams.Repository = $RepositoryName}
-    if ($Version) {$installParams.RequiredVersion = $Version}
-    Log-Message "INFO" "Installing $ModuleName"+(if($Version){" v$Version"}else{""})+(if($RepositoryName){" from $RepositoryName..."}else{"..."}) -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
-    try {Install-Module @installParams; Log-Message "INFO" "$ModuleName installed successfully" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose}
-    catch {Log-Message "ERRR" "Unable to install $ModuleName" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose; return $false}
-    return $true
-}
-
-function Remove-PSModule {[CmdletBinding()]param([Parameter()][string]$ModuleName,[Parameter()][bool]$WhatIfFlag=$false)
-    $found = Get-Module -Name $ModuleName -ListAvailable
-    if ($found.Count -gt 0){
-        Log-Message "VRBS" "Previous versions found. Removing $($found.Count) versions of $ModuleName..." -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
-        try{$found | Uninstall-Module -WhatIf:$WhatIfFlag; Log-Message "INFO" "Previous version removal completed successfully" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose}
-        catch{Log-Message "ERRR" "Unable to remove previous version" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose; return $false}
-        Get-Module -Name $ModuleName -ListAvailable
-    }else{Log-Message "WARN" "No previous version of $ModuleName were found" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose}
-    return $true
-}
 #endregion
 #region     STEP HELPERS
 function Invoke-MainPreStep {[CmdletBinding()]param()
@@ -767,53 +693,6 @@ function Invoke-InstallSoftware {[CmdletBinding()]param([Parameter()][object]$Ap
         Log-Message "VRBS" "Executing Move-Item from $($Application.StagedPath) to $($Application.PostInstallPath)" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
         try{Move-Item -Path $Application.StagedPath -Destination $Application.PostInstallPath -Force}
         catch{Log-Message "ERRR" "Unable to move item from $($Application.StagedPath) to $($Application.PostInstallPath)" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose; return $false}
-    }
-    return $true
-}
-#endregion
-#region UNINSTALL
-# Function to uninstall software
-function Invoke-UninstallSoftware {[CmdletBinding()]param([Parameter()][object]$Application)
-    Log-Message "INFO" "Starting uninstallation of $($Application.Name) v$($Application.Version)..." -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
-    if (-not (Invoke-ScriptStep -StepName "PreUninstall" -Application $Application)) {Log-Message "ERRR" "Pre-uninstall step failed" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose; return $false}
-    $FileType = [System.IO.Path]::GetExtension($Application.PostInstallPath)
-    switch ($FileType) {
-        ".msi" {
-            Log-Message "INFO" "Running MSI uninstaller for $($Application.Name) v$($Application.Version)..." -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
-            $Command = "msiexec.exe /x $PostInstallDirectory/$($Application.Name)_$($Application.Version)$FileType /qb!"
-            Log-Message "DBUG" "Executing command: $Command" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
-            try{
-                Start-Process -FilePath "msiexec.exe" -ArgumentList "/x $PostInstallDirectory/$($Application.Name)_$($Application.Version)$FileType /qb!" -Wait
-                Log-Message "SCSS" "$($Application.Name) v$version uninstalled successfully" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
-            }
-            catch{Log-Message "ERRR" "Command execution unsuccessful: $Command" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose; return $false}
-        }
-        ".exe" {
-            Log-Message "INFO" "Running uninstaller for $($Application.Name) v$($Application.Version)..." -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
-            $UninstallerArguments = $Application.UninstallerArguments
-            $Command = "$($Application.PostInstallPath) $UninstallerArguments"
-            Log-Message "DBUG" "Executing command: $Command" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
-            if($Application.PostInstallPath){
-                try{
-                    Start-Process -FilePath $Application.PostInstallPath -ArgumentList $UninstallerArguments -Wait
-                    Log-Message "SCSS" "$($Application.Name) v$version uninstalled successfully" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
-                }
-                catch{Log-Message "ERRR" "Command execution unsuccessful: $Command" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose; return $false}
-            }
-        }
-        default {
-            if($Application.InstallPath -and (Test-Path -Path $Application.InstallPath)){
-                Log-Message "INFO" "Deleting files for $($Application.Name) v$($Application.Version) in $($Application.InstallPath)..." -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
-                try{Remove-Item -Path $Application.InstallPath -Recurse -Force;Log-Message "SCSS" "Deleting files for $($Application.Name) v$($Application.Version) in $($Application.InstallPath) completed successfully" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose}
-                catch{Log-Message "ERRR" "Unable to remove from $($Application.InstallPath)" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose; return $false}
-            }
-        }
-    }
-    Invoke-ScriptStep -StepName "PostUninstall" -Application $Application
-    if($Application.InstallPath -and (Test-Path -Path $Application.InstallPath)){
-        Log-Message "INFO" "Deleting files for $($Application.Name) v$($Application.Version) in $($Application.InstallPath)..." -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose
-        try{Remove-Item -Path $Application.InstallPath -Recurse -Force;Log-Message "SCSS" "Deleting files for $($Application.Name) v$($Application.Version) in $($Application.InstallPath) completed successfully" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose}
-        catch{Log-Message "ERRR" "Unable to remove from $($Application.InstallPath)" -Debug:$PSBoundParameters.Debug -Verbose:$PSBoundParameters.Verbose; return $false}
     }
     return $true
 }
