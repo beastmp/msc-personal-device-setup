@@ -27,12 +27,8 @@ class SystemOperations {
         $this.StagingDirectory = $stagingDir
         $this.InstallDirectory = $installDir
         $this.Logger = $logger
-        
-        # Add feature flags
         $this.RetryEnabled = $config.execution.retry.enabled
         $this.ParallelEnabled = $config.execution.parallelProcessing.enabled
-        
-        # Initialize from config
         $this.MaxConcurrentJobs = $config.execution.parallelProcessing.maxConcurrentJobs
         $this.JobTimeout = $config.execution.parallelProcessing.jobTimeoutSeconds
         $this.RetryCount = $config.execution.retry.maxAttempts
@@ -46,8 +42,7 @@ class SystemOperations {
                 New-Item -ItemType Directory -Path $DirPath -Force | Out-Null
                 $this.Logger.Log("VRBS", "$DirPath directory created successfully")
                 return $true
-            }
-            catch {$this.Logger.Log("ERRR", "Unable to create $DirPath directory: $_");return $false}
+            } catch {$this.Logger.Log("ERRR", "Unable to create $DirPath directory: $_");return $false}
         }
         return $true
     }
@@ -59,8 +54,7 @@ class SystemOperations {
             cmd "/c" mklink "/J" $SourcePath $TargetPath
             $this.Logger.Log("VRBS", "Created symbolic link from $SourcePath to $TargetPath")
             return $true
-        }
-        catch {$this.Logger.Log("ERRR", "Failed to create symbolic link: $_");return $false}
+        } catch {$this.Logger.Log("ERRR", "Failed to create symbolic link: $_");return $false}
     }
     
     # Add basic move folder operation
@@ -69,11 +63,7 @@ class SystemOperations {
             Move-Item -Path $source -Destination $destination -Force
             $this.Logger.Log("VRBS", "Moved $source to $destination")
             return $true
-        }
-        catch {
-            $this.Logger.Log("ERRR", "Failed to move $source to ${destination}: $_")
-            return $false
-        }
+        } catch {$this.Logger.Log("ERRR", "Failed to move $source to ${destination}: $_");return $false}
     }
 
     # Specialized move for zip extractions
@@ -86,8 +76,7 @@ class SystemOperations {
             Remove-Item -Path $sourceDir -Force -Recurse
             $this.Logger.Log("VRBS", "Removed source directory $sourceDir")
             return $true
-        }
-        catch {$this.Logger.Log("ERRR", "Failed to move contents from $sourceDir to $InstallDir`: $_");return $false}
+        } catch {$this.Logger.Log("ERRR", "Failed to move contents from $sourceDir to $InstallDir`: $_");return $false}
     }
     
     [bool]ValidatePath([string]$path) {
@@ -95,12 +84,10 @@ class SystemOperations {
         try {
             $resolvedPath = [System.IO.Path]::GetFullPath($path)
             if(-not(Test-Path $resolvedPath -IsValid)){$this.Logger.Log("ERRR", "Invalid path format: $path");return $false}
-            
             $parent = Split-Path $resolvedPath -Parent
             if(-not(Test-Path $parent)){if(-not $this.AddFolders($parent)){return $false}}
             return $true
-        }
-        catch {$this.Logger.Log("ERRR", "Path validation failed: $_");return $false}
+        } catch {$this.Logger.Log("ERRR", "Path validation failed: $_");return $false}
     }
 
     # Update ValidateFileHash method signature to make Algorithm optional
@@ -115,8 +102,7 @@ class SystemOperations {
             if ($result) {$this.Logger.Log("VRBS", "Hash validation successful for $FilePath")}
             else {$this.Logger.Log("WARN", "Hash mismatch for $FilePath. Expected: $ExpectedHash, Got: $actualHash")}
             return $result
-        }
-        catch {$this.Logger.Log("ERRR", "Hash validation failed: $_");return $false}
+        } catch {$this.Logger.Log("ERRR", "Hash validation failed: $_");return $false}
     }
 
     # Process Management
@@ -133,17 +119,10 @@ class SystemOperations {
         $attempt = 1
         while ($attempt -le $MaxAttempts) {
             try {
-                if ($attempt -gt 1) {
-                    $this.Logger.Log("WARN", "Retrying $Activity (Attempt $attempt of $MaxAttempts)...")
-                    Start-Sleep -Seconds $DelaySeconds
-                }
+                if($attempt -gt 1){$this.Logger.Log("WARN", "Retrying $Activity (Attempt $attempt of $MaxAttempts)...");Start-Sleep -Seconds $DelaySeconds}
                 return & $ScriptBlock
-            }
-            catch {
-                if ($attempt -eq $MaxAttempts) {
-                    $this.Logger.Log("ERRR", "Failed to $Activity after $MaxAttempts attempts: $_")
-                    throw
-                }
+            } catch {
+                if ($attempt -eq $MaxAttempts) {$this.Logger.Log("ERRR", "Failed to $Activity after $MaxAttempts attempts: $_");throw}
                 $this.Logger.Log("WARN", "Attempt $attempt failed: $_")
                 $attempt++
             }
@@ -152,31 +131,16 @@ class SystemOperations {
     }
 
     [array]InvokeParallel([scriptblock]$ScriptBlock, [array]$Items) {
-        if (-not $this.ParallelEnabled) {
-            $results = @()
-            foreach ($item in $Items) {
-                $results += & $ScriptBlock $item
-            }
-            return $results
-        }
-
+        if(-not $this.ParallelEnabled){$results=@();foreach($item in $Items){$results += & $ScriptBlock $item};return $results}
         $jobs = @()
         $results = @()
         $runspacePool = [runspacefactory]::CreateRunspacePool(1, $this.MaxConcurrentJobs)
         $runspacePool.Open()
-        
         foreach ($item in $Items) {
             $powerShell = [powershell]::Create().AddScript($ScriptBlock).AddArgument($item)
             $powerShell.RunspacePool = $runspacePool
-            
-            $jobs += @{
-                PowerShell = $powerShell
-                Handle = $powerShell.BeginInvoke()
-                Item = $item
-                StartTime = Get-Date
-            }
+            $jobs += @{PowerShell=$powerShell;Handle=$powerShell.BeginInvoke();Item=$item;StartTime=Get-Date}
         }
-        
         while ($jobs.Where({ -not $_.Handle.IsCompleted })) {
             foreach ($job in $jobs.Where({ -not $_.Handle.IsCompleted })) {
                 if ((Get-Date) - $job.StartTime -gt [TimeSpan]::FromSeconds($this.JobTimeout)) {
@@ -187,22 +151,13 @@ class SystemOperations {
             }
             Start-Sleep -Seconds 1
         }
-        
         foreach ($job in $jobs) {
-            try {
-                $results += $job.PowerShell.EndInvoke($job.Handle)
-            }
-            catch {
-                $this.Logger.Log("ERRR", "Error in parallel operation: $_")
-            }
-            finally {
-                $job.PowerShell.Dispose()
-            }
+            try {$results += $job.PowerShell.EndInvoke($job.Handle)}
+            catch {$this.Logger.Log("ERRR", "Error in parallel operation: $_")}
+            finally {$job.PowerShell.Dispose()}
         }
-        
         $runspacePool.Close()
         $runspacePool.Dispose()
-        
         return $results
     }
 
@@ -262,8 +217,7 @@ class SystemOperations {
             [System.Environment]::SetEnvironmentVariable($Name, $Value, [System.EnvironmentVariableTarget]::Machine)
             $this.Logger.Log("VRBS", "Environment variable $Name set to $Value")
             return $true
-        }
-        catch {$this.Logger.Log("ERRR", "Unable to set environment variable $Name to ${Value}: $_");return $false}
+        } catch {$this.Logger.Log("ERRR", "Unable to set environment variable $Name to ${Value}: $_");return $false}
     }
 
     [bool]AddToPath([string]$Value) {
@@ -273,8 +227,7 @@ class SystemOperations {
                 [System.Environment]::SetEnvironmentVariable("Path", "$envPath;$Value", [System.EnvironmentVariableTarget]::Machine)
                 $this.Logger.Log("VRBS", "Added $Value to PATH")
                 return $true
-            }
-            catch {$this.Logger.Log("ERRR", "Unable to add $Value to PATH: $_");return $false}
+            } catch {$this.Logger.Log("ERRR", "Unable to add $Value to PATH: $_");return $false}
         }
         return $true
     }
