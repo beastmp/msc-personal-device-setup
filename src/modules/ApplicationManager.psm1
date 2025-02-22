@@ -34,6 +34,22 @@ class Dependency {
     [Version]$MinVersion
 }
 
+class ApplicationState {
+    [string]$Status
+    [datetime]$LastAccessed = (Get-Date)
+    [datetime]$StartTime
+    [datetime]$EndTime
+    [string]$LastAction
+    [string]$ErrorMessage
+    [hashtable]$Metadata = @{}
+    [bool]$TestingComplete
+    
+    ApplicationState() {
+        $this.StartTime = Get-Date
+        $this.Status = "Initialized"
+    }
+}
+
 class ApplicationManager {
     hidden [object]$SystemOps
     hidden [object]$Logger
@@ -45,7 +61,27 @@ class ApplicationManager {
         $this.ConfigManager = $configManager
     }
 
+    hidden [void]UpdateApplicationState([ApplicationConfig]$app, [string]$status, [string]$action, [string]$errorMessage = "") {
+        $state = $this.ConfigManager.GetApplicationState($app.Name, $app.Version)
+        if (-not $state) {
+            $state = [ApplicationState]::new()
+        }
+        
+        $state.LastAccessed = Get-Date
+        $state.Status = $status
+        $state.LastAction = $action
+        if ($errorMessage) {
+            $state.ErrorMessage = $errorMessage
+        }
+        if ($action -eq "Complete") {
+            $state.EndTime = Get-Date
+        }
+        
+        $this.ConfigManager.SetApplicationState($app.Name, $app.Version, $state)
+    }
+
     [ApplicationConfig]InitializeApplication([ApplicationConfig]$app) {
+        $this.UpdateApplicationState($app, "Initializing", "Init")
         $this.Logger.Log("VRBS", "Initializing application paths for $($app.Name)")
         try {
             $InstallDirectory = $this.ConfigManager.ResolvePath('install')
@@ -79,8 +115,13 @@ class ApplicationManager {
 
             $app = $this.ProcessInstallationArguments($app)
             $this.Logger.Log("VRBS", "Application paths initialized successfully")
+            $this.UpdateApplicationState($app, "Initialized", "Init")
         }
-        catch {$this.Logger.Log("ERRR", "Failed to initialize application paths: $_");throw}
+        catch {
+            $this.UpdateApplicationState($app, "Failed", "Init", $_.Exception.Message)
+            $this.Logger.Log("ERRR", "Failed to initialize application paths: $_")
+            throw
+        }
         return $app
     }
 
@@ -132,31 +173,39 @@ class ApplicationManager {
 
     [bool]Download([ApplicationConfig]$app) {
         if(-not $app.Download) { return $true }
-        $state = $this.ConfigManager.GetApplicationState($app.Name, $app.Version)
+        $this.UpdateApplicationState($app, "Downloading", "Download")
         return $this.SystemOps.InvokeWithRetry({
-            $preSuccess = $this.InvokeStep($app.Name,"Pre","Download",$app)
-            if (-not $preSuccess) {$this.Logger.Log("WARN", "$($app.Name) PreDownload step failed. Proceeding with download...")}
-            $cacheKey = "$($app.Name)_$($app.Version)"
-            $cachePath = Join-Path $this.ConfigManager.ResolvePath('binaries') "$cacheKey.cache"
-            if (Test-Path $cachePath) {
-                $cached = Get-Content $cachePath | ConvertFrom-Json
-                if ($cached.Hash -and ($this.SystemOps.ValidateFileHash($app.BinaryPath, $cached.Hash))) {
-                    $this.Logger.Log("INFO", "Using cached version of $($app.Name)")
-                    return $true
+            try {
+                $preSuccess = $this.InvokeStep($app.Name,"Pre","Download",$app)
+                if (-not $preSuccess) {$this.Logger.Log("WARN", "$($app.Name) PreDownload step failed. Proceeding with download...")}
+                $cacheKey = "$($app.Name)_$($app.Version)"
+                $cachePath = Join-Path $this.ConfigManager.ResolvePath('binaries') "$cacheKey.cache"
+                if (Test-Path $cachePath) {
+                    $cached = Get-Content $cachePath | ConvertFrom-Json
+                    if ($cached.Hash -and ($this.SystemOps.ValidateFileHash($app.BinaryPath, $cached.Hash))) {
+                        $this.Logger.Log("INFO", "Using cached version of $($app.Name)")
+                        $this.UpdateApplicationState($app, "Downloaded", "Download")
+                        return $true
+                    }
                 }
+                $success = switch ($app.InstallationType) {
+                    "Winget"    {$this.DownloadWingetPackage($app)}
+                    "PSModule"  {return $true}
+                    default     {$this.DownloadDirectPackage($app)}
+                }
+                if ($success) {
+                    $hash = (Get-FileHash -Path $app.BinaryPath).Hash
+                    @{Hash=$hash;DateTime=Get-Date -Format "o"} | ConvertTo-Json | Set-Content $cachePath
+                    $postSuccess = $this.InvokeStep($app.Name,"Post","Download",$app)
+                    if (-not $postSuccess) {$this.Logger.Log("WARN", "$($app.Name) PostDownload step failed")}
+                    $this.UpdateApplicationState($app, "Downloaded", "Download")
+                }
+                return $success
             }
-            $success = switch ($app.InstallationType) {
-                "Winget"    {$this.DownloadWingetPackage($app)}
-                "PSModule"  {return $true}
-                default     {$this.DownloadDirectPackage($app)}
+            catch {
+                $this.UpdateApplicationState($app, "Failed", "Download", $_.Exception.Message)
+                return $false
             }
-            if ($success) {
-                $hash = (Get-FileHash -Path $app.BinaryPath).Hash
-                @{Hash=$hash;DateTime=Get-Date -Format "o"} | ConvertTo-Json | Set-Content $cachePath
-                $postSuccess = $this.InvokeStep($app.Name,"Post","Download",$app)
-                if (-not $postSuccess) {$this.Logger.Log("WARN", "$($app.Name) PostDownload step failed")}
-            }
-            return $success
         }, "download $($app.Name)")
     }
     
@@ -171,43 +220,63 @@ class ApplicationManager {
 
     [bool]Install([ApplicationConfig]$app) {
         if(-not $app.Install){return $true}
+        $this.UpdateApplicationState($app, "Installing", "Install")
         return $this.SystemOps.InvokeWithRetry({
-            $preSuccess = $this.InvokeStep($app.Name,"Pre","Install",$app)
-            if (-not $preSuccess) {$this.Logger.Log("WARN", "$($app.Name) PreInstall step failed. Proceeding with installation...")}
-            if($app.SymLinkPath){$this.SystemOps.AddSymLink($app.SymLinkPath,$app.InstallPath)}
-            $success = switch ($app.InstallationType) {
-                "Winget"    {$this.InstallWingetPackage($app)}
-                "PSModule"  {$this.InstallPSModule($app)}
-                default     {$this.InstallDirectPackage($app)}
+            try {
+                $preSuccess = $this.InvokeStep($app.Name,"Pre","Install",$app)
+                if (-not $preSuccess) {$this.Logger.Log("WARN", "$($app.Name) PreInstall step failed. Proceeding with installation...")}
+                if($app.SymLinkPath){$this.SystemOps.AddSymLink($app.SymLinkPath,$app.InstallPath)}
+                $success = switch ($app.InstallationType) {
+                    "Winget"    {$this.InstallWingetPackage($app)}
+                    "PSModule"  {$this.InstallPSModule($app)}
+                    default     {$this.InstallDirectPackage($app)}
+                }
+                if($success) {
+                    if($app.ProcessIDs) {foreach($procId in $app.ProcessIDs) {$this.SystemOps.KillProcess($procId)}}
+                    $postSuccess = $this.InvokeStep($app.Name,"Post","Install",$app)
+                    if (-not $postSuccess) {$this.Logger.Log("WARN", "$($app.Name) PostInstall step failed")}
+                    if(Test-Path $app.StagedPath) {$this.SystemOps.MoveFolder($app.StagedPath, $app.PostInstallPath)}
+                    $this.UpdateApplicationState($app, "Installed", "Complete")
+                }
+                return $success
             }
-            if($success) {
-                if($app.ProcessIDs) {foreach($procId in $app.ProcessIDs) {$this.SystemOps.KillProcess($procId)}}
-                $postSuccess = $this.InvokeStep($app.Name,"Post","Install",$app)
-                if (-not $postSuccess) {$this.Logger.Log("WARN", "$($app.Name) PostInstall step failed")}
-                if(Test-Path $app.StagedPath) {$this.SystemOps.MoveFolder($app.StagedPath, $app.PostInstallPath)}
+            catch {
+                $this.UpdateApplicationState($app, "Failed", "Install", $_.Exception.Message)
+                return $false
             }
-            return $success
         }, "install $($app.Name)")
     }
     
     [bool]Uninstall([ApplicationConfig]$app) {
+        $this.UpdateApplicationState($app, "Uninstalling", "Uninstall")
         return $this.SystemOps.InvokeWithRetry({
-            $preSuccess = $this.InvokeStep($app.Name,"Pre","Uninstall",$app)
-            if (-not $preSuccess) {$this.Logger.Log("WARN", "$($app.Name) PreUninstall step failed. Proceeding with uninstallation...")}
-            $success = switch($app.InstallationType) {
-                "Winget"    {$this.UninstallWingetPackage($app)}
-                "PSModule"  {$this.UninstallPSModule($app)}
-                default     {$this.UninstallDirectPackage($app)}
-            }
-            if($success) {
-                $postSuccess = $this.InvokeStep($app.Name,"Post","Uninstall",$app)
-                if (-not $postSuccess) {$this.Logger.Log("WARN", "$($app.Name) PostUninstall step failed")}
-                    if($app.InstallPath -and (Test-Path $app.InstallPath)) {
-                    Remove-Item -Path $app.InstallPath -Recurse -Force
+            try {
+                $preSuccess = $this.InvokeStep($app.Name,"Pre","Uninstall",$app)
+                if (-not $preSuccess) {$this.Logger.Log("WARN", "$($app.Name) PreUninstall step failed. Proceeding with uninstallation...")}
+                $success = switch($app.InstallationType) {
+                    "Winget"    {$this.UninstallWingetPackage($app)}
+                    "PSModule"  {$this.UninstallPSModule($app)}
+                    default     {$this.UninstallDirectPackage($app)}
                 }
+                if($success) {
+                    $postSuccess = $this.InvokeStep($app.Name,"Post","Uninstall",$app)
+                    if (-not $postSuccess) {$this.Logger.Log("WARN", "$($app.Name) PostUninstall step failed")}
+                        if($app.InstallPath -and (Test-Path $app.InstallPath)) {
+                        Remove-Item -Path $app.InstallPath -Recurse -Force
+                    }
+                    $this.UpdateApplicationState($app, "Uninstalled", "Complete")
+                }
+                return $success
             }
-            return $success
+            catch {
+                $this.UpdateApplicationState($app, "Failed", "Uninstall", $_.Exception.Message)
+                return $false
+            }
         }, "uninstall $($app.Name)")
+    }
+
+    [object]GetApplicationStatus([ApplicationConfig]$app) {
+        return $this.ConfigManager.GetApplicationState($app.Name, $app.Version)
     }
 
     hidden [bool]InvokeStep([string]$appName,[string]$prefix,[string]$action) {return $this.InvokeStep($appName,$prefix,$action,$null)}
