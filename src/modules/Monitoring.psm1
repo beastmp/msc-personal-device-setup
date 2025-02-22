@@ -73,16 +73,13 @@ class LogManager {
         $this.LogFileFormat = $format
     }
 
-    [string]GetLogFileName([string]$LogType, [string]$Action, [string]$TargetName, [string]$Version) {
-        $ScriptName = $(Split-Path $MyInvocation.PSCommandPath -Leaf).Replace(".ps1", "")
+    [string]GetLogFileName([string]$LogType, [string]$Action, [string]$TargetName, [string]$Version, [string]$ScriptName) {
         $DateTime = Get-Date -f 'yyyyMMddHHmmss'
-        
-        return $this.LogFileFormat.Replace("{LogType}", $LogType)
-                                .Replace("{ScriptName}", $ScriptName)
-                                .Replace("{Action}", $Action)
-                                .Replace("{TargetName}", $TargetName)
-                                .Replace("{Version}", $Version)
-                                .Replace("{DateTime}", $DateTime)
+        $replacements = @{"{LogType}"=$LogType;"{ScriptName}"=$ScriptName;"{Action}"=$Action;"{TargetName}"=$TargetName;"{Version}"=$Version;"{DateTime}"=$DateTime}
+        $fileName = $this.LogFileFormat
+        foreach($key in $replacements.Keys){$fileName=$fileName.Replace($key, $replacements[$key])}
+        $this.Logger.Log("DBUG","Log file name generated: $fileName")
+        return $fileName
     }
     
     [void]TrackEvent([string]$name,[hashtable]$properties) {
