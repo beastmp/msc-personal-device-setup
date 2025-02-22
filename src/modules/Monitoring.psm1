@@ -45,29 +45,18 @@ class LogManager {
         if(-not(Test-Path $logDir)){New-Item -ItemType Directory -Path $logDir -Force | Out-Null}
     }
 
-    # Modify Log method to handle uninitialized state
-    [void]Log([string]$level, [string]$message) {
-        $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-        $color=switch($level){"SCSS"{"Green"};"ERRR"{"Red"};"WARN"{"Yellow"};"DBUG"{"Cyan"};"VRBS"{"DarkYellow"};"PROG"{"Magenta"};default{"White"}}
-        Write-Host "[$timestamp] [$level] $message" -ForegroundColor $color
-        if($this.LogPath){
-            $logEntry=@{Timestamp=$timestamp;Level=$level;Message=$message} | ConvertTo-Json
-            Add-Content -Path $this.LogPath -Value $logEntry -ErrorAction SilentlyContinue
-        }
-    }
-    
-    # Add the original method as an overload
-    [void]Log([string]$level,[string]$message,[hashtable]$context){$this.LogWithContext($level,$message,$context)}
-    
-    # Add a private method for the full implementation
-    hidden [void]LogWithContext([string]$level,[string]$message,[hashtable]$context) {
+    [void]Log([string]$level, [string]$message){$this.Log($level,$message,$null)}
+    [void]Log([string]$level, [string]$message, [hashtable]$context = $null) {
         if ($level -eq "VRBS" -and -not $global:VerbosePreference.ToString().Equals('Continue')) { return }
         if ($level -eq "DBUG" -and -not $global:DebugPreference.ToString().Equals('Continue')) { return }
         $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-        $logEntry = @{Timestamp=$timestamp;Level=$level;Message=$message;Context=$context}
-        $color=switch($level){"SCSS"{"Green"};"ERRR"{"Red"};"WARN"{"Yellow"};"DBUG"{"Cyan"};"VRBS"{"DarkYellow"};"PROG"{"Magenta"};default{"White"}}
+        $color = switch($level){"SCSS"{"Green"};"ERRR"{"Red"};"WARN"{"Yellow"};"DBUG"{"Cyan"};"VRBS"{"DarkYellow"};"PROG"{"Magenta"};default{"White"}}
         Write-Host "[$timestamp] [$level] $message" -ForegroundColor $color
-        $logEntry | ConvertTo-Json | Add-Content -Path $this.LogPath -ErrorAction Stop
+        if ($this.LogPath) {
+            $logEntry = @{Timestamp=$timestamp;Level=$level;Message=$message;}
+            if ($context) { $logEntry.Context = $context }
+            $logEntry | ConvertTo-Json | Add-Content -Path $this.LogPath -ErrorAction SilentlyContinue
+        }
     }
     
     # Add method to set custom format
