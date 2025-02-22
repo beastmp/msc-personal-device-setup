@@ -61,6 +61,8 @@ class LogManager {
     
     # Add a private method for the full implementation
     hidden [void]LogWithContext([string]$level,[string]$message,[hashtable]$context) {
+        if ($level -eq "VRBS" -and -not $global:VerbosePreference.ToString().Equals('Continue')) { return }
+        if ($level -eq "DBUG" -and -not $global:DebugPreference.ToString().Equals('Continue')) { return }
         $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
         $logEntry = @{Timestamp=$timestamp;Level=$level;Message=$message;Context=$context}
         $color=switch($level){"SCSS"{"Green"};"ERRR"{"Red"};"WARN"{"Yellow"};"DBUG"{"Cyan"};"VRBS"{"DarkYellow"};"PROG"{"Magenta"};default{"White"}}
