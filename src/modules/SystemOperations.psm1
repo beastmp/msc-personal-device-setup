@@ -47,13 +47,31 @@ class SystemOperations {
         catch {$this.Logger.Log("ERRR", "Failed to create symbolic link: $_");return $false}
     }
     
+    # Add basic move folder operation
     [bool]MoveFolder([string]$source, [string]$destination) {
         try {
             Move-Item -Path $source -Destination $destination -Force
             $this.Logger.Log("VRBS", "Moved $source to $destination")
             return $true
         }
-        catch {$this.Logger.Log("ERRR", "Failed to move $source to ${destination}: $_");return $false}
+        catch {
+            $this.Logger.Log("ERRR", "Failed to move $source to ${destination}: $_")
+            return $false
+        }
+    }
+
+    # Specialized move for zip extractions
+    [bool]MoveFolder([string]$InstallDir, [string]$Version, [string]$Prefix) {
+        $sourceDir = Join-Path $InstallDir "${Prefix}${Version}"
+        $this.Logger.Log("VRBS", "Moving contents from $sourceDir to $InstallDir")
+        try {
+            Get-ChildItem -Path $sourceDir | Move-Item -Destination $InstallDir -Force
+            $this.Logger.Log("VRBS", "Moved contents to $InstallDir")
+            Remove-Item -Path $sourceDir -Force -Recurse
+            $this.Logger.Log("VRBS", "Removed source directory $sourceDir")
+            return $true
+        }
+        catch {$this.Logger.Log("ERRR", "Failed to move contents from $sourceDir to $InstallDir`: $_");return $false}
     }
     
     [bool]ValidatePath([string]$path) {
@@ -125,12 +143,8 @@ class SystemOperations {
         $script:outputData = ""
         $script:errorData = ""
         
-        $outputEvent = Register-ObjectEvent -InputObject $process -EventName OutputDataReceived -Action {
-            if($EventArgs.Data){$script:outputData += "$($EventArgs.Data)`n"}
-        }
-        $errorEvent = Register-ObjectEvent -InputObject $process -EventName ErrorDataReceived -Action {
-            if($EventArgs.Data){$script:errorData += "$($EventArgs.Data)`n"}
-        }
+        $outputEvent = Register-ObjectEvent -InputObject $process -EventName OutputDataReceived -Action {if($EventArgs.Data){$script:outputData += "$($EventArgs.Data)`n"}}
+        $errorEvent = Register-ObjectEvent -InputObject $process -EventName ErrorDataReceived -Action {if($EventArgs.Data){$script:errorData += "$($EventArgs.Data)`n"}}
         
         $process.Start() | Out-Null
         $this.Logger.Log("DBUG", "ProcessID: $($process.Id)")
@@ -166,7 +180,7 @@ class SystemOperations {
             $this.Logger.Log("VRBS", "Environment variable $Name set to $Value")
             return $true
         }
-        catch {$this.Logger.Log("ERRR", "Unable to set environment variable $Name to $Value: $_");return $false}
+        catch {$this.Logger.Log("ERRR", "Unable to set environment variable $Name to ${Value}: $_");return $false}
     }
 
     [bool]AddToPath([string]$Value) {

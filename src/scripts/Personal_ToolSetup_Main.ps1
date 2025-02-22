@@ -103,17 +103,13 @@ function Get-LogFileName {param([Parameter()][ValidateSet("Log","Transcript")][s
 #region     ENVIRONMENT HELPERS
 #endregion
 #region     FILE SYSTEM HELPERS
+# Remove the Move-Folder function as it's now handled by SystemOperations
+# Update any calls to Move-Folder to use $systemOps.MoveFolder instead
 
-function Move-Folder {[CmdletBinding()]param([Parameter()][string]$InstallDir,[Parameter()][string]$Version="",[Parameter()][string]$Prefix="")
-    $sourceDir = "${InstallDir}\${Prefix}${Version}"
-    $destinationDir = $InstallDir
-    $logger.Log("VRBS","Executing Move-Item from $sourceDir to $destinationDir")
-    try{Get-ChildItem -Path $sourceDir | Move-Item -Destination $destinationDir -Force}
-    catch{$logger.Log("ERRR","Unable to move $sourceDir to $destinationDir"); return $false}
-    try{Remove-Item -Path $sourceDir -Recurse -Force}
-    catch{$logger.Log("ERRR","Unable to remove $sourceDir"); return $false}
-    return $true
-}
+# For example, change:
+# Move-Folder -InstallDir $dir -Version $version -Prefix $prefix
+# To:
+# $systemOps.MoveFolder($dir, $version, $prefix)
 
 function Get-SoftwareList {[CmdletBinding()]param([Parameter()][string]$DirPath,[Parameter()][string]$FileName)
     $logger.Log("INFO","Getting software list From: $DirPath\$FileName")
