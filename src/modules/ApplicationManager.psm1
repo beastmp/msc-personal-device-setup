@@ -61,7 +61,8 @@ class ApplicationManager {
         $this.ConfigManager = $configManager
     }
 
-    hidden [void]UpdateApplicationState([ApplicationConfig]$app, [string]$status, [string]$action, [string]$errorMessage = "") {
+    hidden [void]UpdateApplicationState([ApplicationConfig]$app, [string]$status, [string]$action) {$this.UpdateApplicationState($app,$status,$action,"")}
+    hidden [void]UpdateApplicationState([ApplicationConfig]$app, [string]$status, [string]$action, [string]$errorMsg = "") {
         $state = $this.ConfigManager.GetApplicationState($app.Name, $app.Version)
         if (-not $state) {
             $state = [ApplicationState]::new()
@@ -70,8 +71,8 @@ class ApplicationManager {
         $state.LastAccessed = Get-Date
         $state.Status = $status
         $state.LastAction = $action
-        if ($errorMessage) {
-            $state.ErrorMessage = $errorMessage
+        if ($errorMsg) {
+            $state.ErrorMessage = $errorMsg
         }
         if ($action -eq "Complete") {
             $state.EndTime = Get-Date

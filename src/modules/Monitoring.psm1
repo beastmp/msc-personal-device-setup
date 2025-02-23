@@ -35,6 +35,8 @@ class LogManager {
     LogManager() {
         $this.LogLevels=@{INFO=0;SCSS=1;ERRR=2;WARN=3;DBUG=4;VRBS=5;PROG=6}
         $this.LogFileFormat = "{LogType}_{ScriptName}_{Action}_{TargetName}_{Version}_{DateTime}.log"
+        if (-not $PSBoundParameters.ContainsKey('Verbose')){$VerbosePreference = $PSCmdlet.GetVariableValue('VerbosePreference')}
+        if (-not $PSBoundParameters.ContainsKey('Debug')){$DebugPreference = $PSCmdlet.GetVariableValue('DebugPreference')}
     }
     
     # Keep existing constructor as an initialization method
@@ -47,8 +49,10 @@ class LogManager {
 
     [void]Log([string]$level, [string]$message){$this.Log($level,$message,$null)}
     [void]Log([string]$level, [string]$message, [hashtable]$context = $null) {
-        if ($level -eq "VRBS" -and -not $global:VerbosePreference.ToString().Equals('Continue')) { return }
-        if ($level -eq "DBUG" -and -not $global:DebugPreference.ToString().Equals('Continue')) { return }
+        # if (-not $PSBoundParameters.ContainsKey('Verbose')){$VerbosePreference = $PSCmdlet.GetVariableValue('VerbosePreference')}
+        # if (-not $PSBoundParameters.ContainsKey('Debug')){$DebugPreference = $PSCmdlet.GetVariableValue('DebugPreference')}
+        # if ($level -eq "VRBS" -and -not $VerbosePreference.ToString().Equals('Continue')) { return }
+        # if ($level -eq "DBUG" -and -not $DebugPreference.ToString().Equals('Continue')) { return }
         $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
         $color = switch($level){"SCSS"{"Green"};"ERRR"{"Red"};"WARN"{"Yellow"};"DBUG"{"Cyan"};"VRBS"{"DarkYellow"};"PROG"{"Magenta"};default{"White"}}
         Write-Host "[$timestamp] [$level] $message" -ForegroundColor $color
@@ -58,7 +62,7 @@ class LogManager {
             $logEntry | ConvertTo-Json | Add-Content -Path $this.LogPath -ErrorAction SilentlyContinue
         }
     }
-    
+   
     # Add method to set custom format
     [void]SetLogFileFormat([string]$format) {
         $this.LogFileFormat = $format

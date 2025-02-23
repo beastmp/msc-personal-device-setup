@@ -31,6 +31,7 @@ function Invoke-PostDownload_NuGet {[CmdletBinding()]param([Parameter()][object]
     if (-not ($systemOps.AddFolders($Application.InstallPath))) {$logger.Log("ERRR", "Failed to add install path");return $false}
     $logger.Log("VRBS", "Executing Copy-Item from $($Application.StagedPath) to $($Application.InstallPath)\$($Application.Name)$([System.IO.Path]::GetExtension($Application.BinaryPath))")
     try{Copy-Item -Path $Application.StagedPath -Destination "$($Application.InstallPath)\$($Application.Name)$([System.IO.Path]::GetExtension($Application.BinaryPath))" -Force}
+    catch{$logger.Log("ERRR","Unable to copy from $($Application.StagedPath) to $($Application.InstallPath)\$($Application.Name)$([System.IO.Path]::GetExtension($Application.BinaryPath))"); return $false}
     $systemOps.SetEnvironmentVariable("NUGET_HOME",$Application.InstallPath)
     $systemOps.AddToPath($Application.InstallPath)
     return $true

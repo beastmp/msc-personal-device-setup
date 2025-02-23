@@ -1,1 +1,12 @@
-{}
+{
+  "Facebook_Messenger-latest": {
+    "Status": "Installing",
+    "LastAccessed": "2025-02-22T16:29:38.8820847-08:00",
+    "StartTime": "2025-02-22T16:12:10.3312624-08:00",
+    "EndTime": "0001-01-01T00:00:00",
+    "LastAction": "Install",
+    "ErrorMessage": null,
+    "Metadata": {},
+    "TestingComplete": false
+  }
+}
